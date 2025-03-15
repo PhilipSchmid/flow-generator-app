@@ -1,0 +1,7 @@
+FROM golang:1.24 AS builder
+WORKDIR /app
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o flow-generator ./cmd/client
+FROM scratch
+COPY --from=builder /app/flow-generator /
+CMD ["/flow-generator"]

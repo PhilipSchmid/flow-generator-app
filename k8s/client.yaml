@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flow-generator
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: flow-generator
+  template:
+    metadata:
+      labels:
+        app: flow-generator
+    spec:
+      containers:
+      - name: flow-generator
+        image: ghcr.io/philipschmid/flow-generator:main
+        args:
+        - "--server=echo-service"
+        - "--rate=10"
+        - "--max_concurrent=100"
+        - "--protocol=both"
+        - "--min_duration=1"
+        - "--max_duration=10"
