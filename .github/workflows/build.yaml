@@ -10,6 +10,14 @@ on:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dockerfile: ./Dockerfile.client
+            image: ghcr.io/philipschmid/flow-generator
+          - dockerfile: ./Dockerfile.server
+            image: ghcr.io/philipschmid/echo-server
     permissions:
       contents: read
       packages: write
@@ -32,23 +40,15 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ matrix.image }}
 
-      - name: Build and push client Docker image
+      - name: Build and push Docker images
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./Dockerfile.client
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          platforms: linux/amd64,linux/arm64
-
-      - name: Build and push server Docker image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile.server
+          sbom: true
+          provenance: mode=max
+          file: ${{ matrix.dockerfile }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
