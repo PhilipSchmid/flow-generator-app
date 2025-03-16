@@ -26,14 +26,14 @@ Generate flows to a server with custom settings:
 
 ## Configuration Options
 
-Server:
+Server (`echo-server`/`ghcr.io/philipschmid/flow-generator:main`):
 * `--log_level`: Log level (default: info)
 * `--log_format`: Log format: human or json (default: human)
 * `--metrics_port`: Port for Prometheus metrics (default: 9090)
 * `--tracing_enabled`: Enable OpenTelemetry tracing (default: false)
 * `--jaeger_endpoint`: Jaeger collector endpoint (default: "http://localhost:14268/api/traces")
 
-Client:
+Client (`flow-generator`/`ghcr.io/philipschmid/echo-server:main`):
 * `--server`: Server address (default: "localhost")
 * `--rate`: Flows per second (default: 10)
 * `--max_concurrent`: Max concurrent flows (default: 100)
@@ -47,7 +47,6 @@ Client:
 * `--mss`: Maximum Segment Size in bytes
 * `--log_level`: Log level (default: info)
 * `--log_format`: Log format: human or json (default: human)
-* `--metrics_port`: Port for Prometheus metrics (default: 9090)
 * `--tracing_enabled`: Enable OpenTelemetry tracing (default: false)
 * `--jaeger_endpoint`: Jaeger collector endpoint (default: "http://localhost:14268/api/traces")
 

@@ -17,10 +17,6 @@ var (
 		Name: "udp_packets_received_total",
 		Help: "Total number of UDP packets received",
 	})
-	FlowsGenerated = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "flows_generated_total",
-		Help: "Total number of flows generated",
-	})
 	FlowsReceived = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "flows_received_total",
 		Help: "Total number of flows received",
@@ -28,7 +24,7 @@ var (
 )
 
 func InitMetrics() {
-	prometheus.MustRegister(TCPConnections, UDPPackets, FlowsGenerated, FlowsReceived)
+	prometheus.MustRegister(TCPConnections, UDPPackets, FlowsReceived)
 }
 
 func StartMetricsServer(port string) {

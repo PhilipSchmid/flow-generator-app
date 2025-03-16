@@ -10,7 +10,6 @@ import (
 
 	"github.com/PhilipSchmid/flow-generator-app/pkg/config"
 	"github.com/PhilipSchmid/flow-generator-app/pkg/logging"
-	"github.com/PhilipSchmid/flow-generator-app/pkg/metrics"
 	"github.com/PhilipSchmid/flow-generator-app/pkg/tracing"
 
 	"github.com/spf13/pflag"
@@ -118,7 +117,6 @@ func generateFlow(ctx context.Context, server string, pp ProtocolPort, duration 
 		}
 		logging.Logger.Debugf("UDP flow to %s:%d ended after %f seconds", server, pp.Port, duration)
 	}
-	metrics.FlowsGenerated.Inc()
 }
 
 func main() {
@@ -136,7 +134,6 @@ func main() {
 	pflag.Int("mss", 1460, "Maximum Segment Size in bytes")
 	pflag.String("log_level", "info", "Log level: debug, info, warn, error")
 	pflag.String("log_format", "human", "Log format: human or json")
-	pflag.String("metrics_port", "9090", "Port for the metrics server")
 	pflag.Bool("tracing_enabled", false, "Enable tracing")
 	pflag.String("jaeger_endpoint", "http://localhost:14268/api/traces", "Jaeger endpoint for tracing")
 
@@ -160,11 +157,6 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Failed to sync logger: %v\n", err)
 		}
 	}()
-
-	// Initialize and start metrics server
-	metrics.InitMetrics()
-	metricsPort := viper.GetString("metrics_port")
-	metrics.StartMetricsServer(metricsPort)
 
 	// Initialize tracing if enabled
 	if viper.GetBool("tracing_enabled") {
