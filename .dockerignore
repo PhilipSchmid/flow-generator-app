@@ -1,0 +1,7 @@
+.github/
+README.md
+LICENSE
+CODEOWNER
+Dockerfile.*
+.gitignore
+Makefile
