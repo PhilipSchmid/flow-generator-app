@@ -12,6 +12,18 @@ spec:
       labels:
         app: echo-server
     spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - echo-server
+              topologyKey: "kubernetes.io/hostname"
       containers:
       - name: echo-server
         image: ghcr.io/philipschmid/echo-server:main
