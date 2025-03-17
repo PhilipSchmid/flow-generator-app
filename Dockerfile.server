@@ -4,4 +4,4 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o echo-server ./cmd/server
 FROM scratch
 COPY --from=builder /app/echo-server /
-CMD ["/echo-server"]
+ENTRYPOINT ["/echo-server"]
