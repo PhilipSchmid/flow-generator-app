@@ -28,7 +28,7 @@ spec:
       - name: echo-server
         image: ghcr.io/philipschmid/echo-server:main
         args:
-        - "--tcp_ports=8080"
+        - "--tcp_ports_server=8080"
         ports:
         - containerPort: 8080
 ---

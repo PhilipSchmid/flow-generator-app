@@ -15,8 +15,9 @@ import (
 	"github.com/PhilipSchmid/flow-generator-app/pkg/tracing"
 
 	"github.com/spf13/pflag"
-	"github.com/spf13/viper"
 )
+
+var Cfg *config.ServerConfig
 
 func handleTCP(conn net.Conn) {
 	defer conn.Close()
@@ -122,30 +123,23 @@ func parsePorts(portsStr string) []int {
 }
 
 func main() {
-	// Define command-line flags using pflag
-	pflag.String("log_level", "info", "Log level: debug, info, warn, error")
-	pflag.String("log_format", "human", "Log format: human or json")
-	pflag.String("metrics_port", "9090", "Port for the metrics server")
+	// Define flags without defaults
+	pflag.String("log_level", "", "Log level: debug, info, warn, error")
+	pflag.String("log_format", "", "Log format: human or json")
+	pflag.String("metrics_port", "", "Port for the metrics server")
 	pflag.Bool("tracing_enabled", false, "Enable tracing")
-	pflag.String("jaeger_endpoint", "http://localhost:14268/api/traces", "Jaeger endpoint for tracing")
-	pflag.String("tcp_ports", "8080", "Comma-separated list of TCP ports to listen on")
-	pflag.String("udp_ports", "", "Comma-separated list of UDP ports to listen on")
-
-	// Bind pflag flags to Viper
-	if err := viper.BindPFlags(pflag.CommandLine); err != nil {
-		logging.Logger.Fatal("Failed to bind command-line flags: %v", err)
-	}
+	pflag.String("jaeger_endpoint", "", "Jaeger endpoint")
+	pflag.String("tcp_ports_server", "", "Comma-separated list of TCP ports")
+	pflag.String("udp_ports_server", "", "Comma-separated list of UDP ports")
 
 	// Parse the command-line flags
 	pflag.Parse()
 
-	// Initialize configuration
-	config.InitConfig()
+	// Load server configuration
+	Cfg = config.LoadServerConfig()
 
 	// Initialize logger
-	logFormat := viper.GetString("log_format")
-	logLevel := viper.GetString("log_level")
-	logging.InitLogger(logFormat, logLevel)
+	logging.InitLogger(Cfg.LogFormat, Cfg.LogLevel)
 	defer func() {
 		if err := logging.Logger.Sync(); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to sync logger: %v\n", err)
@@ -154,19 +148,16 @@ func main() {
 
 	// Initialize and start metrics server
 	metrics.InitMetrics()
-	metricsPort := viper.GetString("metrics_port")
-	metrics.StartMetricsServer(metricsPort)
+	metrics.StartMetricsServer(Cfg.MetricsPort)
 
 	// Initialize tracing if enabled
-	if viper.GetBool("tracing_enabled") {
-		tracing.InitTracer("echo-server", viper.GetString("jaeger_endpoint"))
+	if Cfg.TracingEnabled {
+		tracing.InitTracer("echo-server", Cfg.JaegerEndpoint)
 	}
 
 	// Parse configurable ports
-	tcpPortsStr := viper.GetString("tcp_ports")
-	udpPortsStr := viper.GetString("udp_ports")
-	tcpPorts := parsePorts(tcpPortsStr)
-	udpPorts := parsePorts(udpPortsStr)
+	tcpPorts := parsePorts(Cfg.TCPPortsServer)
+	udpPorts := parsePorts(Cfg.UDPPortsServer)
 
 	if len(tcpPorts) == 0 && len(udpPorts) == 0 {
 		logging.Logger.Fatal("No valid TCP or UDP ports specified")

@@ -15,7 +15,7 @@ make build
 ### Run the Server
 Start the echo server with custom ports:
 ```bash
-./echo-server --tcp_ports=8080,8443 --udp_ports=5353 --log_level=debug
+./echo-server --tcp_ports_server=8080,8443 --udp_ports_server=5353 --log_level=debug
 ```
 
 ### Run the Client
@@ -32,8 +32,8 @@ Server (`echo-server`/`ghcr.io/philipschmid/flow-generator:main`):
 * `--metrics_port`: Port for Prometheus metrics (default: `9090`)
 * `--tracing_enabled`: Enable OpenTelemetry tracing (default: `false`)
 * `--jaeger_endpoint`: Jaeger collector endpoint (default: `http://localhost:14268/api/traces`)
-* `--tcp_ports`: Comma-separated list of TCP ports (default: `8080`)
-* `--udp_ports`: Comma-separated list of UDP ports (default: `""`)
+* `--tcp_ports_server`: Comma-separated list of TCP ports (default: `8080`)
+* `--udp_ports_server`: Comma-separated list of UDP ports (default: `""`)
 
 Client (`flow-generator`/`ghcr.io/philipschmid/echo-server:main`):
 * `--server`: Server address (default: `localhost`)
@@ -62,7 +62,7 @@ Client (`flow-generator`/`ghcr.io/philipschmid/echo-server:main`):
 Simulate 5 TCP flows per second on port 8080:
 
 ```bash
-./echo-server --tcp_ports=8080
+./echo-server --tcp_ports_server=8080
 ./flow-generator --server=localhost --tcp_ports=8080 --rate=5 --max_concurrent=50 --constant_flows=true
 ```
 
@@ -80,7 +80,7 @@ This generates exactly 5 flows per second on TCP port 8080. Each flow lasts 50 /
 Simulate random traffic across multiple ports:
 
 ```bash
-./echo-server --tcp_ports=8080,8443 --udp_ports=53,123
+./echo-server --tcp_ports_server=8080,8443 --udp_ports_server=53,123
 ./flow-generator --server=localhost --tcp_ports=8080,8443 --udp_ports=53,123 --rate=20 --max_concurrent=200 --protocol=both --min_duration=1 --max_duration=5
 ```
 

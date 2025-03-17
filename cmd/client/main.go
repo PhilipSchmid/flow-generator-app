@@ -15,7 +15,6 @@ import (
 	"github.com/PhilipSchmid/flow-generator-app/pkg/tracing"
 
 	"github.com/spf13/pflag"
-	"github.com/spf13/viper"
 )
 
 type ProtocolPort struct {
@@ -24,6 +23,8 @@ type ProtocolPort struct {
 }
 
 var payloadCache []byte
+
+var Cfg *config.ClientConfig
 
 func init() {
 	src := rand.New(rand.NewPCG(0, 0))
@@ -44,11 +45,11 @@ func constructAddress(server string, port int) string {
 }
 
 func getPayloadSize(src *rand.Rand) int {
-	if size := viper.GetInt("payload_size"); size > 0 {
+	if size := Cfg.PayloadSize; size > 0 {
 		return size // Fixed size
 	}
-	minSize := viper.GetInt("min_payload_size")
-	maxSize := viper.GetInt("max_payload_size")
+	minSize := Cfg.MinPayloadSize
+	maxSize := Cfg.MaxPayloadSize
 	if minSize > 0 && maxSize > minSize {
 		return minSize + src.IntN(maxSize-minSize+1) // Use src.IntN
 	}
@@ -140,41 +141,35 @@ func parsePorts(portsStr string) []int {
 }
 
 func main() {
-	// Define command-line flags using pflag
-	pflag.String("server", "localhost", "Server address or hostname")
-	pflag.Float64("rate", 10.0, "Flow generation rate in flows per second")
-	pflag.Int("max_concurrent", 100, "Maximum number of concurrent flows")
-	pflag.String("protocol", "both", "Protocol to use (tcp, udp, both)")
-	pflag.Float64("min_duration", 1.0, "Minimum flow duration in seconds")
-	pflag.Float64("max_duration", 10.0, "Maximum flow duration in seconds")
-	pflag.Bool("constant_flows", false, "Enable constant flow mode (disables duration randomization)")
-	pflag.String("tcp_ports", "8080", "Comma-separated list of TCP ports to use")
-	pflag.String("udp_ports", "", "Comma-separated list of UDP ports to use")
-	pflag.Int("payload_size", 0, "Fixed payload size in bytes (overrides min_payload_size/max_payload_size)")
-	pflag.Int("min_payload_size", 0, "Minimum payload size in bytes for dynamic range")
-	pflag.Int("max_payload_size", 0, "Maximum payload size in bytes for dynamic range")
-	pflag.Int("mtu", 1500, "Maximum Transmission Unit in bytes")
-	pflag.Int("mss", 1460, "Maximum Segment Size in bytes")
-	pflag.String("log_level", "info", "Log level: debug, info, warn, error")
-	pflag.String("log_format", "human", "Log format: human or json")
+	// Define flags without defaults
+	pflag.String("log_level", "", "Log level: debug, info, warn, error")
+	pflag.String("log_format", "", "Log format: human or json")
+	pflag.String("metrics_port", "", "Port for the metrics server")
 	pflag.Bool("tracing_enabled", false, "Enable tracing")
-	pflag.String("jaeger_endpoint", "http://localhost:14268/api/traces", "Jaeger endpoint for tracing")
-
-	// Bind pflag flags to Viper
-	if err := viper.BindPFlags(pflag.CommandLine); err != nil {
-		logging.Logger.Fatalf("Failed to bind command-line flags: %v", err)
-	}
+	pflag.String("jaeger_endpoint", "", "Jaeger endpoint")
+	pflag.String("server", "", "Server address or hostname")
+	pflag.Float64("rate", 0, "Flow generation rate in flows per second")
+	pflag.Int("max_concurrent", 0, "Maximum number of concurrent flows")
+	pflag.String("protocol", "", "Protocol to use (tcp, udp, both)")
+	pflag.Float64("min_duration", 0, "Minimum flow duration in seconds")
+	pflag.Float64("max_duration", 0, "Maximum flow duration in seconds")
+	pflag.Bool("constant_flows", false, "Enable constant flow mode")
+	pflag.String("tcp_ports", "", "Comma-separated list of TCP ports")
+	pflag.String("udp_ports", "", "Comma-separated list of UDP ports")
+	pflag.Int("payload_size", 0, "Fixed payload size in bytes")
+	pflag.Int("min_payload_size", 0, "Minimum payload size in bytes")
+	pflag.Int("max_payload_size", 0, "Maximum payload size in bytes")
+	pflag.Int("mtu", 0, "Maximum Transmission Unit in bytes")
+	pflag.Int("mss", 0, "Maximum Segment Size in bytes")
 
 	// Parse the command-line flags
 	pflag.Parse()
 
-	// Initialize configuration
-	config.InitConfig()
+	// Load client configuration
+	Cfg = config.LoadClientConfig()
 
 	// Initialize logger
-	logFormat := viper.GetString("log_format")
-	logLevel := viper.GetString("log_level")
-	logging.InitLogger(logFormat, logLevel)
+	logging.InitLogger(Cfg.LogFormat, Cfg.LogLevel)
 	defer func() {
 		if err := logging.Logger.Sync(); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to sync logger: %v\n", err)
@@ -182,26 +177,22 @@ func main() {
 	}()
 
 	// Initialize tracing if enabled
-	if viper.GetBool("tracing_enabled") {
-		tracing.InitTracer("flow-generator", viper.GetString("jaeger_endpoint"))
+	if Cfg.TracingEnabled {
+		tracing.InitTracer("flow-generator", Cfg.JaegerEndpoint)
 	}
 
-	// Retrieve configuration values
-	server := viper.GetString("server")
-	rate := viper.GetFloat64("rate")
-	maxConcurrent := viper.GetInt("max_concurrent")
-	protocol := viper.GetString("protocol")
-	minDuration := viper.GetFloat64("min_duration")
-	maxDuration := viper.GetFloat64("max_duration")
-	constantFlows := viper.GetBool("constant_flows")
-	mtu := viper.GetInt("mtu")
-	mss := viper.GetInt("mss")
-
-	// Parse configurable ports
-	tcpPortsStr := viper.GetString("tcp_ports")
-	udpPortsStr := viper.GetString("udp_ports")
-	tcpPorts := parsePorts(tcpPortsStr)
-	udpPorts := parsePorts(udpPortsStr)
+	// Use config values
+	server := Cfg.Server
+	rate := Cfg.Rate
+	maxConcurrent := Cfg.MaxConcurrent
+	protocol := Cfg.Protocol
+	minDuration := Cfg.MinDuration
+	maxDuration := Cfg.MaxDuration
+	constantFlows := Cfg.ConstantFlows
+	tcpPorts := parsePorts(Cfg.TCPPorts)
+	udpPorts := parsePorts(Cfg.UDPPorts)
+	mtu := Cfg.MTU
+	mss := Cfg.MSS
 
 	// Build available ports based on protocol
 	var availablePorts []ProtocolPort
