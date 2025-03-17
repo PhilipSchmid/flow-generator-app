@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flow-generator
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: flow-generator
+  template:
+    metadata:
+      labels:
+        app: flow-generator
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - flow-generator
+              topologyKey: "kubernetes.io/hostname"
+      containers:
+      - name: flow-generator
+        image: ghcr.io/philipschmid/flow-generator:main
+        args:
+        - "--server=echo-service"
+        - "--tcp_ports=8080"
+        - "--rate=5"
+        - "--max_concurrent=50"
+        - "--constant_flows=true"

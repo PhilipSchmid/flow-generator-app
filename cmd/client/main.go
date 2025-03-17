@@ -6,6 +6,8 @@ import (
 	"math/rand/v2"
 	"net"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/PhilipSchmid/flow-generator-app/pkg/config"
@@ -119,6 +121,24 @@ func generateFlow(ctx context.Context, server string, pp ProtocolPort, duration 
 	}
 }
 
+// parsePorts converts a comma-separated string of ports into a slice of integers
+func parsePorts(portsStr string) []int {
+	if portsStr == "" {
+		return []int{}
+	}
+	var ports []int
+	for _, p := range strings.Split(portsStr, ",") {
+		p = strings.TrimSpace(p)
+		port, err := strconv.Atoi(p)
+		if err == nil && port > 0 && port <= 65535 {
+			ports = append(ports, port)
+		} else {
+			logging.Logger.Warnf("Invalid port '%s' ignored", p)
+		}
+	}
+	return ports
+}
+
 func main() {
 	// Define command-line flags using pflag
 	pflag.String("server", "localhost", "Server address or hostname")
@@ -127,6 +147,9 @@ func main() {
 	pflag.String("protocol", "both", "Protocol to use (tcp, udp, both)")
 	pflag.Float64("min_duration", 1.0, "Minimum flow duration in seconds")
 	pflag.Float64("max_duration", 10.0, "Maximum flow duration in seconds")
+	pflag.Bool("constant_flows", false, "Enable constant flow mode (disables duration randomization)")
+	pflag.String("tcp_ports", "8080", "Comma-separated list of TCP ports to use")
+	pflag.String("udp_ports", "", "Comma-separated list of UDP ports to use")
 	pflag.Int("payload_size", 0, "Fixed payload size in bytes (overrides min_payload_size/max_payload_size)")
 	pflag.Int("min_payload_size", 0, "Minimum payload size in bytes for dynamic range")
 	pflag.Int("max_payload_size", 0, "Maximum payload size in bytes for dynamic range")
@@ -145,10 +168,10 @@ func main() {
 	// Parse the command-line flags
 	pflag.Parse()
 
-	// Initialize configuration (sets defaults and reads config file if present)
+	// Initialize configuration
 	config.InitConfig()
 
-	// Retrieve log format, log level and initialize logger
+	// Initialize logger
 	logFormat := viper.GetString("log_format")
 	logLevel := viper.GetString("log_level")
 	logging.InitLogger(logFormat, logLevel)
@@ -170,11 +193,17 @@ func main() {
 	protocol := viper.GetString("protocol")
 	minDuration := viper.GetFloat64("min_duration")
 	maxDuration := viper.GetFloat64("max_duration")
+	constantFlows := viper.GetBool("constant_flows")
 	mtu := viper.GetInt("mtu")
 	mss := viper.GetInt("mss")
 
-	tcpPorts := []int{80, 21, 25, 443, 8080, 8443}
-	udpPorts := []int{53, 123, 69}
+	// Parse configurable ports
+	tcpPortsStr := viper.GetString("tcp_ports")
+	udpPortsStr := viper.GetString("udp_ports")
+	tcpPorts := parsePorts(tcpPortsStr)
+	udpPorts := parsePorts(udpPortsStr)
+
+	// Build available ports based on protocol
 	var availablePorts []ProtocolPort
 	if protocol == "tcp" || protocol == "both" {
 		for _, p := range tcpPorts {
@@ -188,7 +217,7 @@ func main() {
 	}
 
 	if len(availablePorts) == 0 {
-		logging.Logger.Error("No ports available for the selected protocol")
+		logging.Logger.Error("No valid ports available for the selected protocol")
 		os.Exit(1)
 	}
 
@@ -197,7 +226,7 @@ func main() {
 
 	sem := make(chan struct{}, maxConcurrent)
 	ticker := time.NewTicker(time.Duration(1e9/rate) * time.Nanosecond)
-	src := rand.New(rand.NewPCG(0, 0)) // Define random source
+	src := rand.New(rand.NewPCG(0, 0))
 
 	for {
 		select {
@@ -207,13 +236,24 @@ func main() {
 				go func() {
 					defer func() { <-sem }()
 					pp := availablePorts[src.IntN(len(availablePorts))]
-					duration := minDuration + src.Float64()*(maxDuration-minDuration)
+					var duration float64
+					if constantFlows {
+						// Fixed duration to maintain exact rate
+						duration = float64(maxConcurrent) / rate
+						if duration < minDuration {
+							logging.Logger.Warnf("Duration %f less than min_duration %f; adjusting max_concurrent may be required", duration, minDuration)
+						}
+					} else {
+						// Random duration for pseudo-random traffic
+						duration = minDuration + src.Float64()*(maxDuration-minDuration)
+					}
 					generateFlow(ctx, server, pp, duration, src, mtu, mss)
 				}()
 			default:
 				logging.Logger.Debugf("Max concurrent flows (%d) reached, skipping flow generation", maxConcurrent)
 			}
 		case <-ctx.Done():
+			ticker.Stop()
 			return
 		}
 	}

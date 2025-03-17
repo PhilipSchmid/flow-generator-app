@@ -27,18 +27,17 @@ spec:
       containers:
       - name: echo-server
         image: ghcr.io/philipschmid/echo-server:main
+        args:
+        - "--tcp_ports=8080,8443"
+        - "--udp_ports=53,123"
         ports:
-        - containerPort: 80
-        - containerPort: 21
-        - containerPort: 25
-        - containerPort: 443
         - containerPort: 8080
+          protocol: TCP
         - containerPort: 8443
+          protocol: TCP
         - containerPort: 53
           protocol: UDP
         - containerPort: 123
-          protocol: UDP
-        - containerPort: 69
           protocol: UDP
 ---
 apiVersion: v1
@@ -49,22 +48,6 @@ spec:
   selector:
     app: echo-server
   ports:
-  - name: tcp-80
-    protocol: TCP
-    port: 80
-    targetPort: 80
-  - name: tcp-21
-    protocol: TCP
-    port: 21
-    targetPort: 21
-  - name: tcp-25
-    protocol: TCP
-    port: 25
-    targetPort: 25
-  - name: tcp-443
-    protocol: TCP
-    port: 443
-    targetPort: 443
   - name: tcp-8080
     protocol: TCP
     port: 8080
@@ -81,7 +64,3 @@ spec:
     protocol: UDP
     port: 123
     targetPort: 123
-  - name: udp-69
-    protocol: UDP
-    port: 69
-    targetPort: 69

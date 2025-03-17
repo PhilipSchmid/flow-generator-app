@@ -1,16 +1,16 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: flow-generator
+  name: echo-server
 spec:
   replicas: 3
   selector:
     matchLabels:
-      app: flow-generator
+      app: echo-server
   template:
     metadata:
       labels:
-        app: flow-generator
+        app: echo-server
     spec:
       affinity:
         podAntiAffinity:
@@ -22,10 +22,25 @@ spec:
                 - key: app
                   operator: In
                   values:
-                  - flow-generator
+                  - echo-server
               topologyKey: "kubernetes.io/hostname"
       containers:
-      - name: flow-generator
-        image: ghcr.io/philipschmid/flow-generator:main
+      - name: echo-server
+        image: ghcr.io/philipschmid/echo-server:main
         args:
-        - "--server=echo-service"
+        - "--tcp_ports=8080"
+        ports:
+        - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo-service
+spec:
+  selector:
+    app: echo-server
+  ports:
+  - name: tcp-8080
+    protocol: TCP
+    port: 8080
+    targetPort: 8080
