@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/PhilipSchmid/flow-generator-app/pkg/config"
 	"github.com/PhilipSchmid/flow-generator-app/pkg/logging"
@@ -17,29 +19,43 @@ import (
 	"github.com/spf13/pflag"
 )
 
-var Cfg *config.ServerConfig
+// Global variables
+var cfg *config.ServerConfig
+var mc *metrics.MetricsCollector
 
+// handleTCP processes incoming TCP connections
 func handleTCP(conn net.Conn) {
 	defer conn.Close()
-	metrics.TCPConnections.Inc()
-	defer metrics.TCPConnections.Dec()
-	buf := make([]byte, 1024)
-	metrics.FlowsReceived.Inc()
+	mc.ActiveTCPConnections.Inc()
+	defer mc.ActiveTCPConnections.Dec()
+
+	port := conn.LocalAddr().(*net.TCPAddr).Port
+	portStr := strconv.Itoa(port)
+	protocol := "tcp"
+
+	mc.IncRequestsReceived(protocol, portStr)
+	mc.TCPConnectionsOpenedPerSecond.Inc()
+
 	logging.Logger.Debugf("Accepted TCP connection on %s from %s", conn.LocalAddr().String(), conn.RemoteAddr().String())
+	buf := make([]byte, 1024)
 	for {
 		n, err := conn.Read(buf)
 		if err != nil {
 			logging.Logger.Debugf("TCP connection from %s closed: %v", conn.RemoteAddr().String(), err)
 			return
 		}
-		_, err = conn.Write(buf[:n])
+		mc.AddBytesReceived(protocol, portStr, n)
+
+		n, err = conn.Write(buf[:n])
 		if err != nil {
 			logging.Logger.Debugf("Failed to write to TCP connection from %s: %v", conn.RemoteAddr().String(), err)
 			return
 		}
+		mc.AddBytesSent(protocol, portStr, n)
 	}
 }
 
+// handleUDP processes incoming UDP packets
 func handleUDP(conn *net.UDPConn) {
 	buf := make([]byte, 1024)
 	for {
@@ -48,17 +64,26 @@ func handleUDP(conn *net.UDPConn) {
 			logging.Logger.Infof("UDP connection closed: %v", err)
 			return
 		}
-		metrics.FlowsReceived.Inc()
+		port := conn.LocalAddr().(*net.UDPAddr).Port
+		portStr := strconv.Itoa(port)
+		protocol := "udp"
+
+		mc.IncRequestsReceived(protocol, portStr)
+		mc.UDPPacketsReceived.Inc()
+		mc.AddBytesReceived(protocol, portStr, n)
+
 		logging.Logger.Debugf("Received UDP packet from %s", addr.String())
-		metrics.UDPPackets.Inc()
-		_, err = conn.WriteToUDP(buf[:n], addr)
+
+		n, err = conn.WriteToUDP(buf[:n], addr)
 		if err != nil {
 			logging.Logger.Debugf("Failed to write UDP packet to %s: %v", addr.String(), err)
 			continue
 		}
+		mc.AddBytesSent(protocol, portStr, n)
 	}
 }
 
+// startServer starts a server for the specified network and address
 func startServer(ctx context.Context, wg *sync.WaitGroup, network, address string) {
 	defer wg.Done()
 	if network == "tcp" || network == "tcp6" {
@@ -104,7 +129,7 @@ func startServer(ctx context.Context, wg *sync.WaitGroup, network, address strin
 	}
 }
 
-// parsePorts converts a comma-separated string of ports into a slice of integers
+// parsePorts parses a comma-separated string of ports into a slice of integers
 func parsePorts(portsStr string) []int {
 	if portsStr == "" {
 		return []int{}
@@ -123,7 +148,7 @@ func parsePorts(portsStr string) []int {
 }
 
 func main() {
-	// Define flags without defaults
+	// Define command-line flags
 	pflag.String("log_level", "", "Log level: debug, info, warn, error")
 	pflag.String("log_format", "", "Log format: human or json")
 	pflag.String("metrics_port", "", "Port for the metrics server")
@@ -132,38 +157,50 @@ func main() {
 	pflag.String("tcp_ports_server", "", "Comma-separated list of TCP ports")
 	pflag.String("udp_ports_server", "", "Comma-separated list of UDP ports")
 
-	// Parse the command-line flags
+	// Parse flags
 	pflag.Parse()
 
-	// Load server configuration
-	Cfg = config.LoadServerConfig()
+	// Load configuration
+	cfg = config.LoadServerConfig()
 
 	// Initialize logger
-	logging.InitLogger(Cfg.LogFormat, Cfg.LogLevel)
+	logging.InitLogger(cfg.LogFormat, cfg.LogLevel)
 	defer func() {
 		if err := logging.Logger.Sync(); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to sync logger: %v\n", err)
 		}
 	}()
 
-	// Initialize and start metrics server
-	metrics.InitMetrics()
-	metrics.StartMetricsServer(Cfg.MetricsPort)
+	// Initialize MetricsCollector
+	mc = metrics.NewMetricsCollector()
+
+	// Handle termination signals
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		logging.Logger.Info("Application terminated.")
+		mc.LogMetrics(cfg.LogFormat)
+		os.Exit(0)
+	}()
+
+	// Start metrics server
+	metrics.StartMetricsServer(cfg.MetricsPort)
 
 	// Initialize tracing if enabled
-	if Cfg.TracingEnabled {
-		tracing.InitTracer("echo-server", Cfg.JaegerEndpoint)
+	if cfg.TracingEnabled {
+		tracing.InitTracer("echo-server", cfg.JaegerEndpoint)
 	}
 
-	// Parse configurable ports
-	tcpPorts := parsePorts(Cfg.TCPPortsServer)
-	udpPorts := parsePorts(Cfg.UDPPortsServer)
+	// Parse ports
+	tcpPorts := parsePorts(cfg.TCPPortsServer)
+	udpPorts := parsePorts(cfg.UDPPortsServer)
 
 	if len(tcpPorts) == 0 && len(udpPorts) == 0 {
 		logging.Logger.Fatal("No valid TCP or UDP ports specified")
 	}
 
-	// Start servers with context for graceful shutdown
+	// Start servers with context
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

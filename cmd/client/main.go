@@ -6,66 +6,75 @@ import (
 	"math/rand/v2"
 	"net"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/PhilipSchmid/flow-generator-app/pkg/config"
 	"github.com/PhilipSchmid/flow-generator-app/pkg/logging"
+	"github.com/PhilipSchmid/flow-generator-app/pkg/metrics"
 	"github.com/PhilipSchmid/flow-generator-app/pkg/tracing"
 
 	"github.com/spf13/pflag"
 )
 
+// ProtocolPort combines a protocol and its associated port
 type ProtocolPort struct {
 	Protocol string
 	Port     int
 }
 
+// Global variables
 var payloadCache []byte
+var cfg *config.ClientConfig
+var mc *metrics.MetricsCollector
 
-var Cfg *config.ClientConfig
-
+// init initializes the payload cache with random bytes
 func init() {
 	src := rand.New(rand.NewPCG(0, 0))
 	payloadCache = make([]byte, 1<<20) // 1MB
 	for i := range payloadCache {
-		payloadCache[i] = byte(src.IntN(256)) // Fill with random bytes (0-255)
+		payloadCache[i] = byte(src.IntN(256)) // Random bytes (0-255)
 	}
 }
 
+// constructAddress formats the server address with port
 func constructAddress(server string, port int) string {
 	if ip := net.ParseIP(server); ip != nil {
 		if ip.To4() == nil { // IPv6 address
 			return fmt.Sprintf("[%s]:%d", server, port)
 		}
 	}
-	// IPv4 address or domain name
 	return fmt.Sprintf("%s:%d", server, port)
 }
 
+// getPayloadSize determines the size of the payload to send
 func getPayloadSize(src *rand.Rand) int {
-	if size := Cfg.PayloadSize; size > 0 {
+	if size := cfg.PayloadSize; size > 0 {
 		return size // Fixed size
 	}
-	minSize := Cfg.MinPayloadSize
-	maxSize := Cfg.MaxPayloadSize
+	minSize := cfg.MinPayloadSize
+	maxSize := cfg.MaxPayloadSize
 	if minSize > 0 && maxSize > minSize {
-		return minSize + src.IntN(maxSize-minSize+1) // Use src.IntN
+		return minSize + src.IntN(maxSize-minSize+1)
 	}
 	return 5 // Default to 5 bytes
 }
 
+// generateFlow generates network traffic to the server and reads the echoed response
 func generateFlow(ctx context.Context, server string, pp ProtocolPort, duration float64, src *rand.Rand, mtu int, mss int) {
 	payloadSize := getPayloadSize(src)
 	if payloadSize > len(payloadCache) {
-		payloadSize = len(payloadCache) // Cap at cache size
+		payloadSize = len(payloadCache)
 	}
-	payload := payloadCache[:payloadSize] // Slice the cache
+	payload := payloadCache[:payloadSize]
 
 	logging.Logger.Debugf("Starting %s flow for %f seconds to %s on port %d with payload size %d bytes", pp.Protocol, duration, server, pp.Port, payloadSize)
 
 	addr := constructAddress(server, pp.Port)
+	portStr := strconv.Itoa(pp.Port)
 	if pp.Protocol == "tcp" {
 		conn, err := net.Dial("tcp", addr)
 		if err != nil {
@@ -74,15 +83,34 @@ func generateFlow(ctx context.Context, server string, pp ProtocolPort, duration 
 		}
 		defer conn.Close()
 
-		// Log if TCP payload exceeds MSS (segmentation will occur)
 		if len(payload) > mss {
 			logging.Logger.Debugf("TCP payload size %d exceeds MSS %d, will be segmented", len(payload), mss)
 		}
 
-		if _, err := conn.Write(payload); err != nil {
+		nSent, err := conn.Write(payload)
+		if err != nil {
 			logging.Logger.Warnf("Failed to write to TCP connection: %v", err)
 			return
 		}
+		mc.IncRequestsSent("tcp", portStr)
+		mc.AddBytesSent("tcp", portStr, nSent)
+		mc.TCPConnectionsOpenedPerSecond.Inc()
+
+		totalReceived := 0
+		buf := make([]byte, 1024)
+		for totalReceived < payloadSize {
+			n, err := conn.Read(buf)
+			if err != nil {
+				logging.Logger.Warnf("Failed to read full TCP response: %v", err)
+				break
+			}
+			totalReceived += n
+			mc.AddBytesReceived("tcp", portStr, n)
+		}
+		if totalReceived != payloadSize {
+			logging.Logger.Warnf("TCP byte mismatch: sent %d bytes, received %d bytes", payloadSize, totalReceived)
+		}
+
 		select {
 		case <-time.After(time.Duration(duration * float64(time.Second))):
 			logging.Logger.Debugf("TCP flow to %s:%d ended after %f seconds", server, pp.Port, duration)
@@ -101,16 +129,37 @@ func generateFlow(ctx context.Context, server string, pp ProtocolPort, duration 
 
 		startTime := time.Now()
 		for time.Since(startTime) < time.Duration(duration*float64(time.Second)) {
-			// Check if UDP payload exceeds MTU and skip if it does
 			if len(payload) > mtu {
 				logging.Logger.Warnf("UDP payload size %d exceeds MTU %d, skipping send", len(payload), mtu)
 				continue
 			}
 
-			if _, err := conn.Write(payload); err != nil {
+			nSent, err := conn.Write(payload)
+			if err != nil {
 				logging.Logger.Warnf("Failed to write to UDP connection: %v", err)
 				continue
 			}
+			mc.IncRequestsSent("udp", portStr)
+			mc.AddBytesSent("udp", portStr, nSent)
+
+			buf := make([]byte, payloadSize)
+			if err := conn.SetReadDeadline(time.Now().Add(1 * time.Second)); err != nil {
+				logging.Logger.Warnf("Failed to set read deadline for UDP connection: %v", err)
+			}
+			nReceived, _, err := conn.ReadFromUDP(buf)
+			if err != nil {
+				if err.(net.Error).Timeout() {
+					logging.Logger.Debugf("Timeout waiting for UDP response from %s:%d", server, pp.Port)
+				} else {
+					logging.Logger.Warnf("Failed to read from UDP connection: %v", err)
+				}
+			} else {
+				mc.AddBytesReceived("udp", portStr, nReceived)
+				if nReceived != payloadSize {
+					logging.Logger.Warnf("UDP byte mismatch: sent %d bytes, received %d bytes", payloadSize, nReceived)
+				}
+			}
+
 			select {
 			case <-time.After(100 * time.Millisecond):
 			case <-ctx.Done():
@@ -122,7 +171,7 @@ func generateFlow(ctx context.Context, server string, pp ProtocolPort, duration 
 	}
 }
 
-// parsePorts converts a comma-separated string of ports into a slice of integers
+// parsePorts parses a comma-separated string of ports into a slice of integers
 func parsePorts(portsStr string) []int {
 	if portsStr == "" {
 		return []int{}
@@ -141,7 +190,7 @@ func parsePorts(portsStr string) []int {
 }
 
 func main() {
-	// Define flags without defaults
+	// Define command-line flags
 	pflag.String("log_level", "", "Log level: debug, info, warn, error")
 	pflag.String("log_format", "", "Log format: human or json")
 	pflag.String("metrics_port", "", "Port for the metrics server")
@@ -162,39 +211,52 @@ func main() {
 	pflag.Int("mtu", 0, "Maximum Transmission Unit in bytes")
 	pflag.Int("mss", 0, "Maximum Segment Size in bytes")
 
-	// Parse the command-line flags
+	// Parse flags
 	pflag.Parse()
 
-	// Load client configuration
-	Cfg = config.LoadClientConfig()
+	// Load configuration
+	cfg = config.LoadClientConfig()
 
 	// Initialize logger
-	logging.InitLogger(Cfg.LogFormat, Cfg.LogLevel)
+	logging.InitLogger(cfg.LogFormat, cfg.LogLevel)
 	defer func() {
 		if err := logging.Logger.Sync(); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to sync logger: %v\n", err)
 		}
 	}()
 
+	// Initialize MetricsCollector
+	mc = metrics.NewMetricsCollector()
+
+	// Handle termination signals
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		logging.Logger.Info("Application terminated.")
+		mc.LogMetrics(cfg.LogFormat)
+		os.Exit(0)
+	}()
+
 	// Initialize tracing if enabled
-	if Cfg.TracingEnabled {
-		tracing.InitTracer("flow-generator", Cfg.JaegerEndpoint)
+	if cfg.TracingEnabled {
+		tracing.InitTracer("flow-generator", cfg.JaegerEndpoint)
 	}
 
-	// Use config values
-	server := Cfg.Server
-	rate := Cfg.Rate
-	maxConcurrent := Cfg.MaxConcurrent
-	protocol := Cfg.Protocol
-	minDuration := Cfg.MinDuration
-	maxDuration := Cfg.MaxDuration
-	constantFlows := Cfg.ConstantFlows
-	tcpPorts := parsePorts(Cfg.TCPPorts)
-	udpPorts := parsePorts(Cfg.UDPPorts)
-	mtu := Cfg.MTU
-	mss := Cfg.MSS
+	// Configuration variables
+	server := cfg.Server
+	rate := cfg.Rate
+	maxConcurrent := cfg.MaxConcurrent
+	protocol := cfg.Protocol
+	minDuration := cfg.MinDuration
+	maxDuration := cfg.MaxDuration
+	constantFlows := cfg.ConstantFlows
+	tcpPorts := parsePorts(cfg.TCPPorts)
+	udpPorts := parsePorts(cfg.UDPPorts)
+	mtu := cfg.MTU
+	mss := cfg.MSS
 
-	// Build available ports based on protocol
+	// Build list of available ports
 	var availablePorts []ProtocolPort
 	if protocol == "tcp" || protocol == "both" {
 		for _, p := range tcpPorts {
@@ -229,13 +291,11 @@ func main() {
 					pp := availablePorts[src.IntN(len(availablePorts))]
 					var duration float64
 					if constantFlows {
-						// Fixed duration to maintain exact rate
 						duration = float64(maxConcurrent) / rate
 						if duration < minDuration {
 							logging.Logger.Warnf("Duration %f less than min_duration %f; adjusting max_concurrent may be required", duration, minDuration)
 						}
 					} else {
-						// Random duration for pseudo-random traffic
 						duration = minDuration + src.Float64()*(maxDuration-minDuration)
 					}
 					generateFlow(ctx, server, pp, duration, src, mtu, mss)
