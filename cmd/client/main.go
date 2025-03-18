@@ -9,6 +9,8 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -64,7 +66,9 @@ func getPayloadSize(src *rand.Rand) int {
 }
 
 // generateFlow generates network traffic to the server and reads the echoed response
-func generateFlow(ctx context.Context, server string, pp ProtocolPort, duration float64, src *rand.Rand, mtu int, mss int) {
+func generateFlow(mainCtx context.Context, server string, pp ProtocolPort, duration float64, src *rand.Rand, mtu int, mss int, wg *sync.WaitGroup) {
+	defer wg.Done()
+
 	payloadSize := getPayloadSize(src)
 	if payloadSize > len(payloadCache) {
 		payloadSize = len(payloadCache)
@@ -72,6 +76,10 @@ func generateFlow(ctx context.Context, server string, pp ProtocolPort, duration 
 	payload := payloadCache[:payloadSize]
 
 	logging.Logger.Debugf("Starting %s flow for %f seconds to %s on port %d with payload size %d bytes", pp.Protocol, duration, server, pp.Port, payloadSize)
+
+	// Create a context for this flow with its own timeout
+	flowCtx, flowCancel := context.WithTimeout(mainCtx, time.Duration(duration*float64(time.Second)))
+	defer flowCancel()
 
 	addr := constructAddress(server, pp.Port)
 	portStr := strconv.Itoa(pp.Port)
@@ -111,12 +119,9 @@ func generateFlow(ctx context.Context, server string, pp ProtocolPort, duration 
 			logging.Logger.Warnf("TCP byte mismatch: sent %d bytes, received %d bytes", payloadSize, totalReceived)
 		}
 
-		select {
-		case <-time.After(time.Duration(duration * float64(time.Second))):
-			logging.Logger.Debugf("TCP flow to %s:%d ended after %f seconds", server, pp.Port, duration)
-		case <-ctx.Done():
-			logging.Logger.Debugf("TCP flow to %s:%d canceled", server, pp.Port)
-		}
+		// Wait for the flow's context to be done (timeout or mainCtx cancellation)
+		<-flowCtx.Done()
+		logging.Logger.Debugf("TCP flow to %s:%d ended after %f seconds", server, pp.Port, duration)
 	} else { // udp
 		localAddr, _ := net.ResolveUDPAddr("udp", ":0")
 		remoteAddr, _ := net.ResolveUDPAddr("udp", addr)
@@ -162,7 +167,7 @@ func generateFlow(ctx context.Context, server string, pp ProtocolPort, duration 
 
 			select {
 			case <-time.After(100 * time.Millisecond):
-			case <-ctx.Done():
+			case <-flowCtx.Done():
 				logging.Logger.Debugf("UDP flow to %s:%d canceled", server, pp.Port)
 				return
 			}
@@ -210,6 +215,8 @@ func main() {
 	pflag.Int("max_payload_size", 0, "Maximum payload size in bytes")
 	pflag.Int("mtu", 0, "Maximum Transmission Unit in bytes")
 	pflag.Int("mss", 0, "Maximum Segment Size in bytes")
+	pflag.Float64("flow_timeout", 0.0, "Timeout in seconds for flow generation (0 for no timeout)")
+	pflag.Int("flow_count", 0, "Maximum number of flows to generate (0 for no limit)")
 
 	// Parse flags
 	pflag.Parse()
@@ -221,7 +228,9 @@ func main() {
 	logging.InitLogger(cfg.LogFormat, cfg.LogLevel)
 	defer func() {
 		if err := logging.Logger.Sync(); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to sync logger: %v\n", err)
+			if err.Error() != "sync /dev/stderr: inappropriate ioctl for device" {
+				fmt.Fprintf(os.Stderr, "Failed to sync logger: %v\n", err)
+			}
 		}
 	}()
 
@@ -255,6 +264,8 @@ func main() {
 	udpPorts := parsePorts(cfg.UDPPorts)
 	mtu := cfg.MTU
 	mss := cfg.MSS
+	flowTimeout := cfg.FlowTimeout
+	flowCount := cfg.FlowCount
 
 	// Build list of available ports
 	var availablePorts []ProtocolPort
@@ -274,8 +285,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	// Initialize flow counter and WaitGroup
+	var flowCounter uint64
+	var wg sync.WaitGroup
+
+	// Create a main context with cancellation for controlling flow generation
+	mainCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Apply flow timeout if set
+	if flowTimeout > 0 {
+		var timeoutCancel context.CancelFunc
+		mainCtx, timeoutCancel = context.WithTimeout(mainCtx, time.Duration(flowTimeout*float64(time.Second)))
+		defer timeoutCancel()
+	}
 
 	sem := make(chan struct{}, maxConcurrent)
 	ticker := time.NewTicker(time.Duration(1e9/rate) * time.Nanosecond)
@@ -284,8 +307,17 @@ func main() {
 	for {
 		select {
 		case <-ticker.C:
+			// Check if flow count limit is reached
+			if flowCount > 0 && atomic.LoadUint64(&flowCounter) >= uint64(flowCount) {
+				logging.Logger.Info("Flow count limit reached, stopping flow generation")
+				cancel() // Stop generating new flows
+				continue
+			}
 			select {
 			case sem <- struct{}{}:
+				// Increment flow counter atomically
+				atomic.AddUint64(&flowCounter, 1)
+				wg.Add(1) // Track this flow
 				go func() {
 					defer func() { <-sem }()
 					pp := availablePorts[src.IntN(len(availablePorts))]
@@ -298,13 +330,17 @@ func main() {
 					} else {
 						duration = minDuration + src.Float64()*(maxDuration-minDuration)
 					}
-					generateFlow(ctx, server, pp, duration, src, mtu, mss)
+					generateFlow(mainCtx, server, pp, duration, src, mtu, mss, &wg)
 				}()
 			default:
 				logging.Logger.Debugf("Max concurrent flows (%d) reached, skipping flow generation", maxConcurrent)
 			}
-		case <-ctx.Done():
+		case <-mainCtx.Done():
 			ticker.Stop()
+			logging.Logger.Info("Flow generation stopped, waiting for active flows to complete")
+			wg.Wait() // Wait for all active flows to finish
+			logging.Logger.Info("All flows completed")
+			mc.LogMetrics(cfg.LogFormat) // Log metrics after flows complete
 			return
 		}
 	}

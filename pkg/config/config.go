@@ -32,6 +32,8 @@ type ClientConfig struct {
 	MaxPayloadSize int
 	MTU            int
 	MSS            int
+	FlowTimeout    float64
+	FlowCount      int
 }
 
 // ServerConfig holds server-specific configuration, embedding CommonConfig.
@@ -65,6 +67,8 @@ func LoadClientConfig() *ClientConfig {
 	viper.SetDefault("max_payload_size", 0)
 	viper.SetDefault("mtu", 1500)
 	viper.SetDefault("mss", 1460)
+	viper.SetDefault("flow_timeout", 0.0)
+	viper.SetDefault("flow_count", 0)
 
 	// Load environment variables
 	viper.AutomaticEnv()
@@ -106,6 +110,8 @@ func LoadClientConfig() *ClientConfig {
 		MaxPayloadSize: viper.GetInt("max_payload_size"),
 		MTU:            viper.GetInt("mtu"),
 		MSS:            viper.GetInt("mss"),
+		FlowTimeout:    viper.GetFloat64("flow_timeout"),
+		FlowCount:      viper.GetInt("flow_count"),
 	}
 }
 

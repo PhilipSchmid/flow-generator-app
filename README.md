@@ -37,6 +37,8 @@ Server (`echo-server`/`ghcr.io/philipschmid/flow-generator:main`):
 
 Client (`flow-generator`/`ghcr.io/philipschmid/echo-server:main`):
 * `--server`: Server address (default: `localhost`)
+* `--flow_timeout`: Timeout in seconds for flow generation (0 for no timeout; default: `0`). Once reached, the application terminates.
+* `--flow_count`: Maximum number of flows to generate (0 for no limit; default: `0`). Once reached, the application terminates.
 * `--rate`: Flows per second (default: `10`)
 * `--max_concurrent`: Max concurrent flows (default: `100`)
 * `--protocol`: Protocol (`tcp`, `udp`, `both`; default: `both`)
