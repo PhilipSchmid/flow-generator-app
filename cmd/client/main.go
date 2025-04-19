@@ -89,7 +89,7 @@ func generateFlow(mainCtx context.Context, server string, pp ProtocolPort, durat
 			logging.Logger.Warnf("Failed to connect to %s:%d (TCP): %v", server, pp.Port, err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		if len(payload) > mss {
 			logging.Logger.Debugf("TCP payload size %d exceeds MSS %d, will be segmented", len(payload), mss)
@@ -130,7 +130,7 @@ func generateFlow(mainCtx context.Context, server string, pp ProtocolPort, durat
 			logging.Logger.Warnf("Failed to connect to %s:%d (UDP): %v", server, pp.Port, err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		startTime := time.Now()
 		for time.Since(startTime) < time.Duration(duration*float64(time.Second)) {

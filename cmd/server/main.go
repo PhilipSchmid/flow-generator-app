@@ -25,7 +25,7 @@ var mc *metrics.MetricsCollector
 
 // handleTCP processes incoming TCP connections
 func handleTCP(conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	mc.ActiveTCPConnections.Inc()
 	defer mc.ActiveTCPConnections.Dec()
 
@@ -95,7 +95,7 @@ func startServer(ctx context.Context, wg *sync.WaitGroup, network, address strin
 		logging.Logger.Infof("Listening on %s:%s", network, address)
 		go func() {
 			<-ctx.Done()
-			listener.Close()
+			defer func() { _ = listener.Close() }()
 		}()
 		for {
 			select {
@@ -123,7 +123,7 @@ func startServer(ctx context.Context, wg *sync.WaitGroup, network, address strin
 		logging.Logger.Infof("Listening on %s:%s", network, address)
 		go func() {
 			<-ctx.Done()
-			conn.Close()
+			defer func() { _ = conn.Close() }()
 		}()
 		handleUDP(conn)
 	}

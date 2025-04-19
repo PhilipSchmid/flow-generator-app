@@ -87,9 +87,10 @@ func NewMetricsCollector() *MetricsCollector {
 func (mc *MetricsCollector) IncRequestsReceived(protocol, port string) {
 	mc.RequestsReceived.WithLabelValues(protocol, port).Inc()
 	atomic.AddUint64(&mc.totalRequestsReceived, 1)
-	if protocol == "tcp" {
+	switch protocol {
+	case "tcp":
 		atomic.AddUint64(&mc.totalTCPReceived, 1)
-	} else if protocol == "udp" {
+	case "udp":
 		atomic.AddUint64(&mc.totalUDPReceived, 1)
 	}
 	mc.updateSyncMap(&mc.requestsReceived, protocol, port, 1)
@@ -99,9 +100,10 @@ func (mc *MetricsCollector) IncRequestsReceived(protocol, port string) {
 func (mc *MetricsCollector) IncRequestsSent(protocol, port string) {
 	mc.RequestsSent.WithLabelValues(protocol, port).Inc()
 	atomic.AddUint64(&mc.totalRequestsSent, 1)
-	if protocol == "tcp" {
+	switch protocol {
+	case "tcp":
 		atomic.AddUint64(&mc.totalTCPSent, 1)
-	} else if protocol == "udp" {
+	case "udp":
 		atomic.AddUint64(&mc.totalUDPSent, 1)
 	}
 	mc.updateSyncMap(&mc.requestsSent, protocol, port, 1)
