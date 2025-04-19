@@ -26,11 +26,13 @@ func getLogLevel(level string) zapcore.Level {
 // InitLogger initializes the logger based on logformat and loglevel
 func InitLogger(logFormat string, logLevel string) {
 	var cfg zap.Config
-	if logFormat == "human" {
+
+	switch logFormat {
+	case "human":
 		cfg = zap.NewDevelopmentConfig()
-	} else if logFormat == "json" {
+	case "json":
 		cfg = zap.NewProductionConfig()
-	} else {
+	default:
 		// Default to human-readable if an invalid format is provided
 		cfg = zap.NewDevelopmentConfig()
 	}
