@@ -36,3 +36,25 @@ spec:
         - "--protocol=both"
         - "--min_duration=1"
         - "--max_duration=5"
+        ports:
+        - containerPort: 9090
+          name: metrics
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8082
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8082
+          initialDelaySeconds: 5
+          periodSeconds: 5

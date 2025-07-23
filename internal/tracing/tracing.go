@@ -9,7 +9,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.7.0"
 
-	"github.com/PhilipSchmid/flow-generator-app/pkg/logging"
+	"github.com/PhilipSchmid/flow-generator-app/internal/logging"
 )
 
 func InitTracer(serviceName, endpoint string) {

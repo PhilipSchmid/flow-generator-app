@@ -9,10 +9,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/PhilipSchmid/flow-generator-app/pkg/logging"
+	"github.com/PhilipSchmid/flow-generator-app/internal/logging"
 	"github.com/olekukonko/tablewriter"
 	"github.com/prometheus/client_golang/prometheus"
-	"golang.org/x/term"
 )
 
 // MetricsCollector manages Prometheus and local metrics.
@@ -38,6 +37,8 @@ type MetricsCollector struct {
 	totalUDPReceived      uint64
 	totalUDPSent          uint64
 }
+
+var metricsRegistered = false
 
 // NewMetricsCollector initializes the collector and registers Prometheus metrics.
 func NewMetricsCollector() *MetricsCollector {
@@ -69,16 +70,19 @@ func NewMetricsCollector() *MetricsCollector {
 		),
 	}
 
-	// Register Prometheus metrics
-	prometheus.MustRegister(
-		mc.RequestsReceived,
-		mc.RequestsSent,
-		mc.BytesReceived,
-		mc.BytesSent,
-		mc.TCPConnectionsOpenedPerSecond,
-		mc.UDPPacketsReceived,
-		mc.ActiveTCPConnections,
-	)
+	// Register Prometheus metrics only once
+	if !metricsRegistered {
+		prometheus.MustRegister(
+			mc.RequestsReceived,
+			mc.RequestsSent,
+			mc.BytesReceived,
+			mc.BytesSent,
+			mc.TCPConnectionsOpenedPerSecond,
+			mc.UDPPacketsReceived,
+			mc.ActiveTCPConnections,
+		)
+		metricsRegistered = true
+	}
 
 	return mc
 }
@@ -111,12 +115,18 @@ func (mc *MetricsCollector) IncRequestsSent(protocol, port string) {
 
 // AddBytesReceived adds bytes to received counters.
 func (mc *MetricsCollector) AddBytesReceived(protocol, port string, n int) {
+	if n < 0 {
+		return
+	}
 	mc.BytesReceived.WithLabelValues(protocol, port).Add(float64(n))
 	mc.updateSyncMap(&mc.bytesReceived, protocol, port, uint64(n))
 }
 
 // AddBytesSent adds bytes to sent counters.
 func (mc *MetricsCollector) AddBytesSent(protocol, port string, n int) {
+	if n < 0 {
+		return
+	}
 	mc.BytesSent.WithLabelValues(protocol, port).Add(float64(n))
 	mc.updateSyncMap(&mc.bytesSent, protocol, port, uint64(n))
 }
@@ -131,7 +141,6 @@ func (mc *MetricsCollector) IncUDPPacketsReceived() {
 	mc.UDPPacketsReceived.Inc()
 }
 
-// SetActiveTCPConnections sets the active TCP connections gauge.
 func (mc *MetricsCollector) SetActiveTCPConnections(n int) {
 	mc.ActiveTCPConnections.Set(float64(n))
 }
@@ -158,43 +167,37 @@ func (mc *MetricsCollector) updateSyncMap(m *sync.Map, protocol, port string, de
 // LogMetrics prints all metrics in the specified format upon termination.
 func (mc *MetricsCollector) LogMetrics(logFormat string) {
 	if logFormat == "human" {
-		// Check if the terminal supports colors
-		supportsColor := os.Getenv("NO_COLOR") == "" && term.IsTerminal(int(os.Stdout.Fd()))
-
 		// Total Metrics Table
 		table := tablewriter.NewWriter(os.Stdout)
-		table.SetHeader([]string{"Metric", "Value"})
-		if supportsColor {
-			table.SetHeaderColor(tablewriter.Colors{tablewriter.FgGreenColor}, tablewriter.Colors{tablewriter.FgGreenColor})
-		}
-		table.Append([]string{"Total Requests Received", fmt.Sprintf("%d", atomic.LoadUint64(&mc.totalRequestsReceived))})
-		table.Append([]string{"Total Requests Sent", fmt.Sprintf("%d", atomic.LoadUint64(&mc.totalRequestsSent))})
-		table.Append([]string{"Total TCP Requests Received", fmt.Sprintf("%d", atomic.LoadUint64(&mc.totalTCPReceived))})
-		table.Append([]string{"Total TCP Requests Sent", fmt.Sprintf("%d", atomic.LoadUint64(&mc.totalTCPSent))})
-		table.Append([]string{"Total UDP Requests Received", fmt.Sprintf("%d", atomic.LoadUint64(&mc.totalUDPReceived))})
-		table.Append([]string{"Total UDP Requests Sent", fmt.Sprintf("%d", atomic.LoadUint64(&mc.totalUDPSent))})
+		table.Header("Metric", "Value")
+		_ = table.Append("Total Requests Received", fmt.Sprintf("%d", atomic.LoadUint64(&mc.totalRequestsReceived)))
+		_ = table.Append("Total Requests Sent", fmt.Sprintf("%d", atomic.LoadUint64(&mc.totalRequestsSent)))
+		_ = table.Append("Total TCP Requests Received", fmt.Sprintf("%d", atomic.LoadUint64(&mc.totalTCPReceived)))
+		_ = table.Append("Total TCP Requests Sent", fmt.Sprintf("%d", atomic.LoadUint64(&mc.totalTCPSent)))
+		_ = table.Append("Total UDP Requests Received", fmt.Sprintf("%d", atomic.LoadUint64(&mc.totalUDPReceived)))
+		_ = table.Append("Total UDP Requests Sent", fmt.Sprintf("%d", atomic.LoadUint64(&mc.totalUDPSent)))
 		fmt.Println("Total Metrics:")
-		table.Render()
+		_ = table.Render()
 
 		// Per-Protocol/Port Metrics
 		requestsReceived := mc.getSyncMapData(&mc.requestsReceived)
 		if len(requestsReceived) > 0 {
-			printTable("Requests Received Per-protocol/port:", []string{"Protocol", "Port", "Requests Received"}, requestsReceived, supportsColor)
+			printTable("Requests Received Per-protocol/port:", []string{"Protocol", "Port", "Requests Received"}, requestsReceived, false)
 		}
 
 		requestsSent := mc.getSyncMapData(&mc.requestsSent)
 		if len(requestsSent) > 0 {
-			printTable("Requests Sent Per-protocol/port:", []string{"Protocol", "Port", "Requests Sent"}, requestsSent, supportsColor)
+			printTable("Requests Sent Per-protocol/port:", []string{"Protocol", "Port", "Requests Sent"}, requestsSent, false)
 		}
 
 		bytesReceived := mc.getSyncMapData(&mc.bytesReceived)
 		if len(bytesReceived) > 0 {
-			printTable("Bytes Received Per-protocol/port:", []string{"Protocol", "Port", "Bytes Received"}, bytesReceived, supportsColor)
+			printTable("Bytes Received Per-protocol/port:", []string{"Protocol", "Port", "Bytes Received"}, bytesReceived, false)
 		}
 
 		bytesSent := mc.getSyncMapData(&mc.bytesSent)
 		if len(bytesSent) > 0 {
-			printTable("Bytes Sent Per-protocol/port:", []string{"Protocol", "Port", "Bytes Sent"}, bytesSent, supportsColor)
+			printTable("Bytes Sent Per-protocol/port:", []string{"Protocol", "Port", "Bytes Sent"}, bytesSent, false)
 		}
 	} else {
 		// JSON output for non-human formats
@@ -218,10 +221,7 @@ func (mc *MetricsCollector) LogMetrics(logFormat string) {
 // printTable prints a sorted table for a given metrics category
 func printTable(title string, headers []string, data map[string]map[string]uint64, supportsColor bool) {
 	table := tablewriter.NewWriter(os.Stdout)
-	table.SetHeader(headers)
-	if supportsColor {
-		table.SetHeaderColor(tablewriter.Colors{tablewriter.FgGreenColor}, tablewriter.Colors{tablewriter.FgGreenColor}, tablewriter.Colors{tablewriter.FgGreenColor})
-	}
+	table.Header(headers[0], headers[1], headers[2])
 	// Sort protocols alphabetically
 	var protocols []string
 	for protocol := range data {
@@ -242,11 +242,11 @@ func printTable(title string, headers []string, data map[string]map[string]uint6
 		})
 		for _, port := range ports {
 			count := portsMap[port]
-			table.Append([]string{protocol, port, fmt.Sprintf("%d", count)})
+			_ = table.Append(protocol, port, fmt.Sprintf("%d", count))
 		}
 	}
 	fmt.Println(title)
-	table.Render()
+	_ = table.Render()
 }
 
 // getSyncMapData converts sync.Map to a nested map for JSON output.
@@ -264,4 +264,9 @@ func (mc *MetricsCollector) getSyncMapData(m *sync.Map) map[string]map[string]ui
 		return true
 	})
 	return result
+}
+
+// FlushMetrics logs the final metrics in human-readable format
+func (mc *MetricsCollector) FlushMetrics() {
+	mc.LogMetrics("human")
 }
