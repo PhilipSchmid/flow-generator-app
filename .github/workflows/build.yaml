@@ -103,7 +103,7 @@ jobs:
         uses: anchore/sbom-action@v0
         with:
           image: ${{ matrix.image }}@${{ steps.build.outputs.digest }}
-          artifact-name: sbom-${{ matrix.image }}.spdx.json
+          format: spdx-json
           output-file: sbom.spdx.json
 
       - name: Upload SBOM
