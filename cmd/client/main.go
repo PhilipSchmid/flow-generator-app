@@ -14,10 +14,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/PhilipSchmid/flow-generator-app/pkg/config"
-	"github.com/PhilipSchmid/flow-generator-app/pkg/logging"
-	"github.com/PhilipSchmid/flow-generator-app/pkg/metrics"
-	"github.com/PhilipSchmid/flow-generator-app/pkg/tracing"
+	"github.com/PhilipSchmid/flow-generator-app/internal/config"
+	"github.com/PhilipSchmid/flow-generator-app/internal/logging"
+	"github.com/PhilipSchmid/flow-generator-app/internal/metrics"
+	"github.com/PhilipSchmid/flow-generator-app/internal/tracing"
+	"github.com/PhilipSchmid/flow-generator-app/internal/version"
 
 	"github.com/spf13/pflag"
 )
@@ -28,13 +29,13 @@ type ProtocolPort struct {
 	Port     int
 }
 
-// Global variables
 var payloadCache []byte
 var cfg *config.ClientConfig
 var mc *metrics.MetricsCollector
 
 // init initializes the payload cache with random bytes
 func init() {
+	// #nosec G404 - math/rand is sufficient for test data generation
 	src := rand.New(rand.NewPCG(0, 0))
 	payloadCache = make([]byte, 1<<20) // 1MB
 	for i := range payloadCache {
@@ -196,6 +197,7 @@ func parsePorts(portsStr string) []int {
 
 func main() {
 	// Define command-line flags
+	versionFlag := pflag.Bool("version", false, "Print version information and exit")
 	pflag.String("log_level", "", "Log level: debug, info, warn, error")
 	pflag.String("log_format", "", "Log format: human or json")
 	pflag.String("metrics_port", "", "Port for the metrics server")
@@ -221,20 +223,28 @@ func main() {
 	// Parse flags
 	pflag.Parse()
 
-	// Load configuration
-	cfg = config.LoadClientConfig()
+	// Handle version flag
+	if *versionFlag {
+		fmt.Println("Flow Generator Client")
+		fmt.Println(version.Info())
+		os.Exit(0)
+	}
 
-	// Initialize logger
+	// Load configuration
+	var err error
+	cfg, err = config.LoadClientConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load configuration: %v\n", err)
+		os.Exit(1)
+	}
+
 	logging.InitLogger(cfg.LogFormat, cfg.LogLevel)
 	defer func() {
-		if err := logging.Logger.Sync(); err != nil {
-			if err.Error() != "sync /dev/stderr: inappropriate ioctl for device" {
-				fmt.Fprintf(os.Stderr, "Failed to sync logger: %v\n", err)
-			}
+		if err := logging.SyncLogger(); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to sync logger: %v\n", err)
 		}
 	}()
 
-	// Initialize MetricsCollector
 	mc = metrics.NewMetricsCollector()
 
 	// Handle termination signals
@@ -247,12 +257,10 @@ func main() {
 		os.Exit(0)
 	}()
 
-	// Initialize tracing if enabled
 	if cfg.TracingEnabled {
 		tracing.InitTracer("flow-generator", cfg.JaegerEndpoint)
 	}
 
-	// Configuration variables
 	server := cfg.Server
 	rate := cfg.Rate
 	maxConcurrent := cfg.MaxConcurrent
@@ -285,11 +293,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Initialize flow counter and WaitGroup
 	var flowCounter uint64
 	var wg sync.WaitGroup
 
-	// Create a main context with cancellation for controlling flow generation
 	mainCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -302,12 +308,12 @@ func main() {
 
 	sem := make(chan struct{}, maxConcurrent)
 	ticker := time.NewTicker(time.Duration(1e9/rate) * time.Nanosecond)
+	// #nosec G404 - math/rand is sufficient for flow scheduling randomization
 	src := rand.New(rand.NewPCG(0, 0))
 
 	for {
 		select {
 		case <-ticker.C:
-			// Check if flow count limit is reached
 			if flowCount > 0 && atomic.LoadUint64(&flowCounter) >= uint64(flowCount) {
 				logging.Logger.Info("Flow count limit reached, stopping flow generation")
 				cancel() // Stop generating new flows

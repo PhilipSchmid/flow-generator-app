@@ -2,8 +2,9 @@ package metrics
 
 import (
 	"net/http"
+	"time"
 
-	"github.com/PhilipSchmid/flow-generator-app/pkg/logging"
+	"github.com/PhilipSchmid/flow-generator-app/internal/logging"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -27,11 +28,22 @@ func InitMetrics() {
 	prometheus.MustRegister(TCPConnections, UDPPackets, FlowsReceived)
 }
 
-func StartMetricsServer(port string) {
-	http.Handle("/metrics", promhttp.Handler())
+func StartMetricsServer(port string) error {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+
+	server := &http.Server{
+		Addr:              ":" + port,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
 	go func() {
-		if err := http.ListenAndServe(":"+port, nil); err != nil {
-			logging.Logger.Fatalf("Failed to start metrics server: %v", err)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			if logging.Logger != nil {
+				logging.Logger.Errorf("Failed to start metrics server: %v", err)
+			}
 		}
 	}()
+	return nil
 }

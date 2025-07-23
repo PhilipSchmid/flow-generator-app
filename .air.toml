@@ -1,0 +1,43 @@
+# Config file for Air (https://github.com/air-verse/air)
+
+root = "."
+testdata_dir = "testdata"
+tmp_dir = "tmp"
+
+[build]
+  # Binary to build
+  bin = "./tmp/main"
+  # Custom binary build command
+  cmd = "go build -o ./tmp/main ."
+  # Delay before rebuilding (ms)
+  delay = 1000
+  # Exclude files/dirs
+  exclude_dir = ["assets", "tmp", "vendor", "testdata", "bin", "scripts", "k8s", ".github"]
+  exclude_file = []
+  exclude_regex = ["_test.go"]
+  exclude_unchanged = false
+  follow_symlink = false
+  # Watch these file extensions
+  include_ext = ["go", "tpl", "tmpl", "html"]
+  # Kill delay (ms)
+  kill_delay = "0s"
+  # Send Interrupt signal before Kill signal
+  send_interrupt = true
+  # Delay after sending Interrupt signal (ms)
+  stop_on_error = true
+
+[color]
+  # Colorize air output
+  app = ""
+  build = "yellow"
+  main = "magenta"
+  runner = "green"
+  watcher = "cyan"
+
+[log]
+  # Show log with timestamp
+  time = true
+
+[misc]
+  # Delete tmp directory on exit
+  clean_on_exit = true

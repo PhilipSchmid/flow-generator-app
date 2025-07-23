@@ -1,7 +1,17 @@
 FROM golang:1.24@sha256:dd26b024adcdee20239479d884829d471fd821099b2f596f8f5d20b81bebca95 AS builder
+
+# Build arguments for version information
+ARG VERSION=dev
+ARG BUILD_DATE
+ARG GIT_COMMIT
+
 WORKDIR /app
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o flow-generator ./cmd/client
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-s -w \
+    -X github.com/PhilipSchmid/flow-generator-app/internal/version.Version=${VERSION} \
+    -X github.com/PhilipSchmid/flow-generator-app/internal/version.BuildDate=${BUILD_DATE} \
+    -X github.com/PhilipSchmid/flow-generator-app/internal/version.GitCommit=${GIT_COMMIT}" \
+    -o flow-generator ./cmd/client
 FROM scratch
 COPY --from=builder /app/flow-generator /
 ENTRYPOINT ["/flow-generator"]
