@@ -226,7 +226,7 @@ docker-push: docker-build
 	@printf "$(GREEN)✓ All Docker images pushed successfully$(NC)\n"
 
 ## docker-run: Run containers locally
-docker-run:
+docker-run: docker-build
 	@printf "$(BLUE)Starting Docker containers...$(NC)\n"
 	@$(DOCKER) run -d --name echo-server -p 8080:8080 -p 8082:8082 -p 9090:9090 $(SERVER_IMAGE):$(VERSION)
 	@printf "$(GREEN)✓ Echo server is running on ports 8080 (TCP), 8082 (health), and 9090 (metrics)$(NC)\n"
