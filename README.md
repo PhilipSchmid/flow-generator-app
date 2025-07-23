@@ -1,6 +1,6 @@
 # Flow Generator
 
-![Build and push Docker image](https://github.com/philipschmid/flow-generator-app/actions/workflows/build.yaml/badge.svg) ![Go syntax and format check](https://github.com/philipschmid/flow-generator-app/actions/workflows/lint.yaml/badge.svg) ![Go tests and app build](https://github.com/philipschmid/flow-generator-app/actions/workflows/test.yaml/badge.svg)
+![Build and push Docker image](https://github.com/philipschmid/flow-generator-app/actions/workflows/build.yaml/badge.svg) ![CI](https://github.com/philipschmid/flow-generator-app/actions/workflows/ci.yaml/badge.svg)
 
 This project provides a server and client to generate network flows (TCP and UDP) for Kubernetes network testing (e.g., for Cilium and Hubble). The server echoes back received data, while the client generates configurable flows to simulate network traffic.
 

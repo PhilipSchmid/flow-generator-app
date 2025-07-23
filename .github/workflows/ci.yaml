@@ -75,6 +75,7 @@ jobs:
 
       - name: Upload Trivy scan results to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v3
+        if: always() && github.event_name != 'pull_request'
         with:
           sarif_file: 'trivy-results.sarif'
 
@@ -85,6 +86,7 @@ jobs:
 
       - name: Upload gosec scan results to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v3
+        if: always() && github.event_name != 'pull_request'
         with:
           sarif_file: 'gosec-results.sarif'
 
