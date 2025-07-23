@@ -13,8 +13,8 @@
   ],
   "dockerfile": {
     "enabled": true,
-    "fileMatch": [
-      "^Dockerfile$"
+    "managerFilePatterns": [
+      "/^Dockerfile$/"
     ],
     "pinDigests": true
   },
