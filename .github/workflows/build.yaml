@@ -124,21 +124,56 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Generate Release Notes
+      - name: Generate changelog
+        id: changelog
         run: |
-          echo "## Docker Images" > release-notes.md
-          echo "" >> release-notes.md
-          echo "- \`ghcr.io/philipschmid/echo-server:${{ github.ref_name }}\`" >> release-notes.md
-          echo "- \`ghcr.io/philipschmid/flow-generator:${{ github.ref_name }}\`" >> release-notes.md
-          echo "" >> release-notes.md
-          echo "## What's Changed" >> release-notes.md
-          echo "" >> release-notes.md
-          echo "See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md) for details." >> release-notes.md
+          # Get the previous tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          CURRENT_TAG=${GITHUB_REF#refs/tags/}
+
+          if [ -z "$PREV_TAG" ]; then
+            echo "First release"
+            CHANGELOG="Initial release of flow-generator-app"
+          else
+            # Generate changelog from commits
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" $PREV_TAG..$CURRENT_TAG)
+          fi
+
+          # Save to file for release notes
+          cat > release-notes.md << EOF
+          ## What's Changed
+
+          $CHANGELOG
+
+          ## Docker Images
+
+          ### Echo Server
+          \`\`\`bash
+          docker pull ghcr.io/philipschmid/echo-server:${CURRENT_TAG}
+          docker pull ghcr.io/philipschmid/echo-server:latest
+          \`\`\`
+
+          ### Flow Generator
+          \`\`\`bash
+          docker pull ghcr.io/philipschmid/flow-generator:${CURRENT_TAG}
+          docker pull ghcr.io/philipschmid/flow-generator:latest
+          \`\`\`
+
+          ## Full Changelog
+
+          https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${CURRENT_TAG}
+          EOF
+
+          echo "version=${CURRENT_TAG}" >> $GITHUB_OUTPUT
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           body_path: release-notes.md
-          generate_release_notes: true
+          generate_release_notes: false
+          draft: false
+          prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') || contains(github.ref, '-alpha') || contains(github.ref, '-pre') }}
           make_latest: true
