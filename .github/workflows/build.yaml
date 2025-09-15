@@ -10,7 +10,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  GO_VERSION: '1.24'
+  GO_VERSION: '1.25'
 
 jobs:
   build-and-push:
