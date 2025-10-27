@@ -146,7 +146,7 @@ jobs:
           go build -trimpath -ldflags="-s -w" -o dist/${{ matrix.os }}_${{ matrix.arch }}/flow-generator ./cmd/client
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: binaries-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/${{ matrix.os }}_${{ matrix.arch }}/*
