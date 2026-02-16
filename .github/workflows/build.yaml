@@ -85,7 +85,7 @@ jobs:
 
       - name: Run Trivy vulnerability scanner
         if: github.event_name != 'pull_request'
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@0.34.0
         with:
           image-ref: ${{ matrix.image }}@${{ steps.build.outputs.digest }}
           format: 'sarif'
