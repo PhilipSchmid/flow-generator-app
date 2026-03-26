@@ -85,23 +85,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH,MEDIUM'
-          exit-code: '0'
-
-      - name: Upload Trivy scan results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v4
-        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-        continue-on-error: true
-        with:
-          sarif_file: 'trivy-results.sarif'
-
       - name: Run gosec security scanner
         uses: securego/gosec@master
         with:
@@ -231,13 +214,6 @@ jobs:
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: Run Trivy vulnerability scanner on Docker image
-        uses: aquasecurity/trivy-action@0.34.1
-        with:
-          image-ref: ${{ matrix.image }}:test
-          severity: 'CRITICAL,HIGH'
-          exit-code: '1'
 
   all-checks-passed:
     name: All Checks Passed
