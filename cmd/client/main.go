@@ -39,7 +39,7 @@ func init() {
 	src := rand.New(rand.NewPCG(0, 0))
 	payloadCache = make([]byte, 1<<20) // 1MB
 	for i := range payloadCache {
-		payloadCache[i] = byte(src.IntN(256)) // Random bytes (0-255)
+		payloadCache[i] = byte(src.Uint32() & 0xFF) // Random bytes (0-255)
 	}
 }
 
