@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"math/rand/v2"
 	"net"
 	"sync"
 	"testing"
@@ -69,8 +68,7 @@ func TestGetPayloadSize(t *testing.T) {
 			cfg = &tt.cfg
 			defer func() { cfg = oldCfg }()
 
-			src := rand.New(rand.NewPCG(0, 0))
-			size := getPayloadSize(src)
+			size := getPayloadSize()
 
 			if tt.expected == -1 {
 				assert.GreaterOrEqual(t, size, tt.cfg.MinPayloadSize)
@@ -195,11 +193,10 @@ func TestGenerateFlow(t *testing.T) {
 
 	ctx := context.Background()
 	pp := ProtocolPort{Protocol: "tcp", Port: serverAddr.Port}
-	src := rand.New(rand.NewPCG(0, 0))
 	var wg sync.WaitGroup
 
 	wg.Add(1)
-	generateFlow(ctx, "127.0.0.1", pp, 0.1, src, 1500, 1460, &wg)
+	generateFlow(ctx, "127.0.0.1", pp, 0.1, 1500, 1460, &wg)
 	wg.Wait()
 
 	assert.True(t, true)
@@ -313,7 +310,6 @@ func BenchmarkGenerateFlow(b *testing.B) {
 
 	ctx := context.Background()
 	pp := ProtocolPort{Protocol: "tcp", Port: serverAddr.Port}
-	src := rand.New(rand.NewPCG(0, 0))
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -321,7 +317,7 @@ func BenchmarkGenerateFlow(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		var wg sync.WaitGroup
 		wg.Add(1)
-		generateFlow(ctx, "127.0.0.1", pp, 0.01, src, 1500, 1460, &wg)
+		generateFlow(ctx, "127.0.0.1", pp, 0.01, 1500, 1460, &wg)
 		wg.Wait()
 	}
 }

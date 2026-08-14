@@ -35,11 +35,10 @@ var mc *metrics.MetricsCollector
 
 // init initializes the payload cache with random bytes
 func init() {
-	// #nosec G404 - math/rand is sufficient for test data generation
-	src := rand.New(rand.NewPCG(0, 0))
 	payloadCache = make([]byte, 1<<20) // 1MB
 	for i := range payloadCache {
-		payloadCache[i] = byte(src.Uint32() & 0xFF) // Random bytes (0-255)
+		// #nosec G404 - math/rand is sufficient for test data generation
+		payloadCache[i] = byte(rand.Uint32() & 0xFF) // Random bytes (0-255)
 	}
 }
 
@@ -54,23 +53,24 @@ func constructAddress(server string, port int) string {
 }
 
 // getPayloadSize determines the size of the payload to send
-func getPayloadSize(src *rand.Rand) int {
+func getPayloadSize() int {
 	if size := cfg.PayloadSize; size > 0 {
 		return size // Fixed size
 	}
 	minSize := cfg.MinPayloadSize
 	maxSize := cfg.MaxPayloadSize
 	if minSize > 0 && maxSize > minSize {
-		return minSize + src.IntN(maxSize-minSize+1)
+		// #nosec G404 - math/rand is sufficient for test data generation
+		return minSize + rand.IntN(maxSize-minSize+1)
 	}
 	return 5 // Default to 5 bytes
 }
 
 // generateFlow generates network traffic to the server and reads the echoed response
-func generateFlow(mainCtx context.Context, server string, pp ProtocolPort, duration float64, src *rand.Rand, mtu int, mss int, wg *sync.WaitGroup) {
+func generateFlow(mainCtx context.Context, server string, pp ProtocolPort, duration float64, mtu int, mss int, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	payloadSize := getPayloadSize(src)
+	payloadSize := getPayloadSize()
 	if payloadSize > len(payloadCache) {
 		payloadSize = len(payloadCache)
 	}
@@ -108,6 +108,15 @@ func generateFlow(mainCtx context.Context, server string, pp ProtocolPort, durat
 		totalReceived := 0
 		buf := make([]byte, 1024)
 		for totalReceived < payloadSize {
+			// Bound each read by the flow's own deadline -- without this, a
+			// stalled or unresponsive server blocks here indefinitely,
+			// leaking the goroutine and its semaphore slot forever instead
+			// of respecting min_duration/max_duration/flow_timeout.
+			if deadline, ok := flowCtx.Deadline(); ok {
+				if err := conn.SetReadDeadline(deadline); err != nil {
+					logging.Logger.Warnf("Failed to set read deadline for TCP connection: %v", err)
+				}
+			}
 			n, err := conn.Read(buf)
 			if err != nil {
 				logging.Logger.Warnf("Failed to read full TCP response: %v", err)
@@ -133,13 +142,17 @@ func generateFlow(mainCtx context.Context, server string, pp ProtocolPort, durat
 		}
 		defer func() { _ = conn.Close() }()
 
+		if len(payload) > mtu {
+			// Payload size is fixed for the lifetime of this flow, so if it
+			// exceeds the MTU once it exceeds it on every iteration -- retrying
+			// here would busy-loop for the full flow duration instead of
+			// backing off. Fail the whole flow instead.
+			logging.Logger.Warnf("UDP payload size %d exceeds MTU %d, aborting flow", len(payload), mtu)
+			return
+		}
+
 		startTime := time.Now()
 		for time.Since(startTime) < time.Duration(duration*float64(time.Second)) {
-			if len(payload) > mtu {
-				logging.Logger.Warnf("UDP payload size %d exceeds MTU %d, skipping send", len(payload), mtu)
-				continue
-			}
-
 			nSent, err := conn.Write(payload)
 			if err != nil {
 				logging.Logger.Warnf("Failed to write to UDP connection: %v", err)
@@ -308,8 +321,6 @@ func main() {
 
 	sem := make(chan struct{}, maxConcurrent)
 	ticker := time.NewTicker(time.Duration(1e9/rate) * time.Nanosecond)
-	// #nosec G404 - math/rand is sufficient for flow scheduling randomization
-	src := rand.New(rand.NewPCG(0, 0))
 
 	for {
 		select {
@@ -326,7 +337,8 @@ func main() {
 				wg.Add(1) // Track this flow
 				go func() {
 					defer func() { <-sem }()
-					pp := availablePorts[src.IntN(len(availablePorts))]
+					// #nosec G404 - math/rand is sufficient for flow scheduling randomization
+					pp := availablePorts[rand.IntN(len(availablePorts))]
 					var duration float64
 					if constantFlows {
 						duration = float64(maxConcurrent) / rate
@@ -334,9 +346,10 @@ func main() {
 							logging.Logger.Warnf("Duration %f less than min_duration %f; adjusting max_concurrent may be required", duration, minDuration)
 						}
 					} else {
-						duration = minDuration + src.Float64()*(maxDuration-minDuration)
+						// #nosec G404 - math/rand is sufficient for flow scheduling randomization
+						duration = minDuration + rand.Float64()*(maxDuration-minDuration)
 					}
-					generateFlow(mainCtx, server, pp, duration, src, mtu, mss, &wg)
+					generateFlow(mainCtx, server, pp, duration, mtu, mss, &wg)
 				}()
 			default:
 				logging.Logger.Debugf("Max concurrent flows (%d) reached, skipping flow generation", maxConcurrent)
