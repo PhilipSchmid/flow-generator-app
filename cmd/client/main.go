@@ -149,7 +149,9 @@ func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics
 	if pp.Protocol == "tcp" {
 		conn, err := dialer.DialContext(flowCtx, "tcp", addr)
 		if err != nil {
-			logging.Logger.Warnf("Failed to connect to %s:%d (TCP): %v", cfg.Server, pp.Port, err)
+			if flowCtx.Err() == nil {
+				logging.Logger.Warnf("Failed to connect to %s:%d (TCP): %v", cfg.Server, pp.Port, err)
+			}
 			return
 		}
 		defer func() { _ = conn.Close() }()
@@ -202,7 +204,9 @@ func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics
 	} else { // udp
 		conn, err := dialer.DialContext(flowCtx, "udp", addr)
 		if err != nil {
-			logging.Logger.Warnf("Failed to connect to %s:%d (UDP): %v", cfg.Server, pp.Port, err)
+			if flowCtx.Err() == nil {
+				logging.Logger.Warnf("Failed to connect to %s:%d (UDP): %v", cfg.Server, pp.Port, err)
+			}
 			return
 		}
 		defer func() { _ = conn.Close() }()
