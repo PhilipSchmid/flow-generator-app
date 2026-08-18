@@ -181,7 +181,18 @@ docker exec -it echo-server /dashboard
 docker exec -it flow-generator /dashboard
 ```
 
-The dashboard shows configured and achieved flow rates, active flows, capacity-limited starts, failures, payload throughput, protocol and port activity, and sampled echo latency. It keeps 1-, 5-, and 15-minute averages visible; use left/right to select the window for charts and p50/p90/p95/p99 summaries. Press `q` to leave; the monitored process keeps running.
+The heading shows the process role, version, uptime, sample age, health, and active configuration. The client view adds target attainment, concurrency headroom, flow outcomes, payload throughput, protocol and port activity, and sampled echo latency. The server view shows request activity, active TCP connections, and unique active TCP client IPs. UDP is connectionless, so UDP senders are represented by packet and port activity instead of a connected-client count.
+
+The dashboard keeps 1-, 5-, and 15-minute averages visible. Charts auto-scale within the selected window so small changes remain visible; the dashed flow-rate line marks the configured target, and the table provides exact percentiles. Monitor-style shortcuts are also shown in the footer:
+
+| Key | Action |
+|-----|--------|
+| `←` / `→`, `h` / `l`, `Tab` / `Shift+Tab` | Change the chart and percentile window |
+| `1`, `5`, `0` | Select the 1-, 5-, or 15-minute window |
+| `Space` | Pause or resume dashboard sampling; traffic continues |
+| `r` | Refresh now |
+| `?`, `F1` | Toggle dashboard help |
+| `q`, `F10` | Leave the dashboard; the monitored process keeps running |
 
 Latency sampling is capped at roughly 1,000 flows per second. TCP measures its echo; UDP measures the first successful echo in a sampled flow rather than timing every packet. The dashboard reports p50, p90, p95, and p99 when enough samples exist.
 
