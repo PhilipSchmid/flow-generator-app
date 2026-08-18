@@ -1,6 +1,7 @@
 # Variables
 GO := go
 GOLANGCI_LINT := golangci-lint
+GOLANGCI_LINT_VERSION := v2.4.0
 DOCKER := docker
 SERVER_IMAGE := ghcr.io/philipschmid/echo-server
 CLIENT_IMAGE := ghcr.io/philipschmid/flow-generator
@@ -25,8 +26,12 @@ COVERAGE_DIR := coverage
 
 # Platforms for cross-compilation
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
+BINARY_EXT := $(if $(filter windows,$(GOOS)),.exe,)
 
-.PHONY: all build test lint clean docker-build help
+.PHONY: all help deps generate build build-server build-client build-all \
+	build-platform test test-verbose test-race test-coverage benchmark lint fmt \
+	vet mod-tidy clean docker-build docker-push docker-run docker-stop \
+	install-tools dev-server dev-client quick-test
 
 # Default target
 all: clean lint test build
@@ -53,6 +58,7 @@ help:
 	@printf "  $(GREEN)test-race$(NC)        Run tests with race detector\n"
 	@printf "  $(GREEN)test-coverage$(NC)    Run tests with coverage\n"
 	@printf "  $(GREEN)benchmark$(NC)        Run benchmarks\n"
+	@printf "  $(GREEN)quick-test$(NC)       Run a local TCP/UDP smoke test\n"
 	@printf "\n"
 	@printf "$(YELLOW)Quality targets:$(NC)\n"
 	@printf "  $(GREEN)lint$(NC)             Run linters\n"
@@ -63,13 +69,12 @@ help:
 	@printf "$(YELLOW)Docker targets:$(NC)\n"
 	@printf "  $(GREEN)docker-build$(NC)     Build Docker images\n"
 	@printf "  $(GREEN)docker-push$(NC)      Push Docker images\n"
-	@printf "  $(GREEN)docker-run$(NC)       Run containers locally\n"
-	@printf "  $(GREEN)docker-stop$(NC)      Stop and remove containers\n"
+	@printf "  $(GREEN)docker-run$(NC)       Build and run the echo server container\n"
+	@printf "  $(GREEN)docker-stop$(NC)      Stop and remove the echo server container\n"
 	@printf "\n"
 	@printf "$(YELLOW)Utility targets:$(NC)\n"
 	@printf "  $(GREEN)clean$(NC)            Clean build artifacts\n"
 	@printf "  $(GREEN)install-tools$(NC)    Install development tools\n"
-	@printf "  $(GREEN)proto$(NC)            Generate protobuf files (if applicable)"
 
 ## deps: Download and tidy dependencies
 deps:
@@ -125,12 +130,12 @@ build-platform:
 		-X github.com/PhilipSchmid/flow-generator-app/internal/version.Version=$(VERSION) \
 		-X github.com/PhilipSchmid/flow-generator-app/internal/version.BuildDate=$(BUILD_DATE) \
 		-X github.com/PhilipSchmid/flow-generator-app/internal/version.GitCommit=$(GIT_COMMIT)" \
-		-o $(BIN_DIR)/$(PLATFORM)/echo-server ./cmd/server
+		-o $(BIN_DIR)/$(PLATFORM)/echo-server$(BINARY_EXT) ./cmd/server
 	@GOOS=$(GOOS) GOARCH=$(GOARCH) $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS) \
 		-X github.com/PhilipSchmid/flow-generator-app/internal/version.Version=$(VERSION) \
 		-X github.com/PhilipSchmid/flow-generator-app/internal/version.BuildDate=$(BUILD_DATE) \
 		-X github.com/PhilipSchmid/flow-generator-app/internal/version.GitCommit=$(GIT_COMMIT)" \
-		-o $(BIN_DIR)/$(PLATFORM)/flow-generator ./cmd/client
+		-o $(BIN_DIR)/$(PLATFORM)/flow-generator$(BINARY_EXT) ./cmd/client
 
 ## test: Run tests
 test:
@@ -167,7 +172,7 @@ benchmark:
 ## lint: Run linters
 lint:
 	@printf "$(BLUE)Running linters...$(NC)\n"
-	@$(GOLANGCI_LINT) run
+	@$(GOLANGCI_LINT) run --enable errcheck --timeout 5m ./...
 	@printf "$(GREEN)✓ All linters passed$(NC)\n"
 
 ## fmt: Format code
@@ -242,21 +247,21 @@ docker-stop:
 ## install-tools: Install development tools
 install-tools:
 	@printf "$(BLUE)Installing development tools...$(NC)\n"
-	@which $(GOLANGCI_LINT) > /dev/null || (printf "$(YELLOW)Installing golangci-lint...$(NC)\n" && \
-		curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $$(go env GOPATH)/bin)
-	@which air > /dev/null || (printf "$(YELLOW)Installing air for live reload...$(NC)\n" && \
+	@command -v $(GOLANGCI_LINT) > /dev/null || (printf "$(YELLOW)Installing golangci-lint...$(NC)\n" && \
+		curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $$(go env GOPATH)/bin $(GOLANGCI_LINT_VERSION))
+	@command -v air > /dev/null || (printf "$(YELLOW)Installing air for live reload...$(NC)\n" && \
 		go install github.com/air-verse/air@latest)
 	@printf "$(GREEN)✓ Development tools installed$(NC)\n"
 
 ## dev-server: Run server with live reload
 dev-server:
-	@which air > /dev/null || (printf "$(RED)Error: air not found. Please run 'make install-tools' first$(NC)\n" && exit 1)
+	@command -v air > /dev/null || (printf "$(RED)Error: air not found. Please run 'make install-tools' first$(NC)\n" && exit 1)
 	@printf "$(BLUE)Starting server with live reload...$(NC)\n"
 	@air --build.cmd "go build -o ./tmp/echo-server ./cmd/server" --build.bin "./tmp/echo-server"
 
 ## dev-client: Run client with live reload
 dev-client:
-	@which air > /dev/null || (printf "$(RED)Error: air not found. Please run 'make install-tools' first$(NC)\n" && exit 1)
+	@command -v air > /dev/null || (printf "$(RED)Error: air not found. Please run 'make install-tools' first$(NC)\n" && exit 1)
 	@printf "$(BLUE)Starting client with live reload...$(NC)\n"
 	@air --build.cmd "go build -o ./tmp/flow-generator ./cmd/client" --build.bin "./tmp/flow-generator --server localhost"
 
