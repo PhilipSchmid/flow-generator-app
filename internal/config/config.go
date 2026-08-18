@@ -2,6 +2,9 @@ package config
 
 import (
 	"fmt"
+	"net/url"
+	"os"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/pflag"
@@ -10,7 +13,9 @@ import (
 
 const (
 	// EnvPrefix is the prefix for all environment variables
-	EnvPrefix = "FLOW_GENERATOR"
+	EnvPrefix      = "FLOW_GENERATOR"
+	maxPayloadSize = 1 << 20
+	maxFlowRate    = 1_000_000_000
 )
 
 // CommonConfig holds configuration fields shared between client and server.
@@ -62,6 +67,17 @@ func (c *CommonConfig) Validate() error {
 	if !contains(validLogFormats, c.LogFormat) {
 		return fmt.Errorf("invalid log format: %s, must be one of: %v", c.LogFormat, validLogFormats)
 	}
+	if c.MetricsPort != "" {
+		if err := validatePort(c.MetricsPort, "metrics_port"); err != nil {
+			return err
+		}
+	}
+	if c.TracingEnabled {
+		parsed, err := url.ParseRequestURI(c.JaegerEndpoint)
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return fmt.Errorf("jaeger_endpoint must be an http(s) OTLP/gRPC URL")
+		}
+	}
 
 	return nil
 }
@@ -78,6 +94,9 @@ func (c *ClientConfig) Validate() error {
 
 	if c.Rate <= 0 {
 		return fmt.Errorf("rate must be positive")
+	}
+	if c.Rate > maxFlowRate {
+		return fmt.Errorf("rate cannot exceed %d flows per second", maxFlowRate)
 	}
 
 	if c.MaxConcurrent <= 0 {
@@ -96,9 +115,24 @@ func (c *ClientConfig) Validate() error {
 	if c.MinDuration > c.MaxDuration {
 		return fmt.Errorf("min_duration cannot be greater than max_duration")
 	}
+	if c.MaxDuration == 0 {
+		return fmt.Errorf("max_duration must be positive")
+	}
 
 	if c.TCPPorts == "" && c.UDPPorts == "" {
 		return fmt.Errorf("at least one port (TCP or UDP) must be specified")
+	}
+	if c.Protocol == "tcp" && c.TCPPorts == "" {
+		return fmt.Errorf("tcp_ports must be specified when protocol is tcp")
+	}
+	if c.Protocol == "udp" && c.UDPPorts == "" {
+		return fmt.Errorf("udp_ports must be specified when protocol is udp")
+	}
+	if err := validatePortList(c.TCPPorts, "tcp_ports"); err != nil {
+		return err
+	}
+	if err := validatePortList(c.UDPPorts, "udp_ports"); err != nil {
+		return err
 	}
 
 	if c.MTU <= 0 || c.MSS <= 0 {
@@ -107,6 +141,31 @@ func (c *ClientConfig) Validate() error {
 
 	if c.MSS >= c.MTU {
 		return fmt.Errorf("MSS must be less than MTU")
+	}
+	if c.PayloadSize < 0 || c.MinPayloadSize < 0 || c.MaxPayloadSize < 0 {
+		return fmt.Errorf("payload sizes cannot be negative")
+	}
+	if c.PayloadSize > maxPayloadSize || c.MinPayloadSize > maxPayloadSize || c.MaxPayloadSize > maxPayloadSize {
+		return fmt.Errorf("payload sizes cannot exceed %d bytes", maxPayloadSize)
+	}
+	if (c.MinPayloadSize == 0) != (c.MaxPayloadSize == 0) {
+		return fmt.Errorf("min_payload_size and max_payload_size must be set together")
+	}
+	if c.MinPayloadSize > c.MaxPayloadSize {
+		return fmt.Errorf("min_payload_size cannot be greater than max_payload_size")
+	}
+	udpPayloadSize := c.PayloadSize
+	if udpPayloadSize == 0 {
+		udpPayloadSize = c.MaxPayloadSize
+	}
+	if (c.Protocol == "udp" || (c.Protocol == "both" && c.UDPPorts != "")) && udpPayloadSize > c.MTU {
+		return fmt.Errorf("UDP payload size cannot exceed MTU")
+	}
+	if c.FlowTimeout < 0 {
+		return fmt.Errorf("flow_timeout cannot be negative")
+	}
+	if c.FlowCount < 0 {
+		return fmt.Errorf("flow_count cannot be negative")
 	}
 
 	return nil
@@ -120,6 +179,17 @@ func (c *ServerConfig) Validate() error {
 
 	if c.TCPPortsServer == "" && c.UDPPortsServer == "" {
 		return fmt.Errorf("at least one port (TCP or UDP) must be specified")
+	}
+	if err := validatePortList(c.TCPPortsServer, "tcp_ports_server"); err != nil {
+		return err
+	}
+	if err := validatePortList(c.UDPPortsServer, "udp_ports_server"); err != nil {
+		return err
+	}
+	if c.HealthPort != "" {
+		if err := validatePort(c.HealthPort, "health_port"); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -212,7 +282,9 @@ func initViper() {
 	viper.SetConfigName("config")
 	viper.AddConfigPath(".")
 	viper.AddConfigPath("/etc/flow-generator")
-	viper.AddConfigPath("$HOME/.flow-generator")
+	if home, err := os.UserHomeDir(); err == nil {
+		viper.AddConfigPath(home + "/.flow-generator")
+	}
 
 	// Ignore if config file is not found
 	_ = viper.ReadInConfig()
@@ -224,12 +296,13 @@ func setCommonDefaults() {
 	viper.SetDefault("log_format", "human")
 	viper.SetDefault("metrics_port", "9090")
 	viper.SetDefault("tracing_enabled", false)
-	viper.SetDefault("jaeger_endpoint", "http://localhost:14268/api/traces")
+	viper.SetDefault("jaeger_endpoint", "http://localhost:4317")
 }
 
 // setClientDefaults sets default values for client configuration
 func setClientDefaults() {
 	setCommonDefaults()
+	viper.SetDefault("metrics_port", "9091")
 
 	// Client-specific defaults
 	viper.SetDefault("server", "localhost")
@@ -248,6 +321,33 @@ func setClientDefaults() {
 	viper.SetDefault("mss", 1460)
 	viper.SetDefault("flow_timeout", 0.0)
 	viper.SetDefault("flow_count", 0)
+}
+
+func validatePort(value, name string) error {
+	port, err := strconv.Atoi(value)
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("%s must be a port between 1 and 65535", name)
+	}
+	return nil
+}
+
+func validatePortList(value, name string) error {
+	if value == "" {
+		return nil
+	}
+	seen := make(map[int]struct{})
+	for _, rawPort := range strings.Split(value, ",") {
+		portText := strings.TrimSpace(rawPort)
+		port, err := strconv.Atoi(portText)
+		if err != nil || port < 1 || port > 65535 {
+			return fmt.Errorf("%s contains invalid port %q", name, portText)
+		}
+		if _, exists := seen[port]; exists {
+			return fmt.Errorf("%s contains duplicate port %d", name, port)
+		}
+		seen[port] = struct{}{}
+	}
+	return nil
 }
 
 // setServerDefaults sets default values for server configuration
