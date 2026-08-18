@@ -34,7 +34,7 @@ func (h *UDPHandler) Handle(conn *net.UDPConn) {
 	portStr := strconv.Itoa(conn.LocalAddr().(*net.UDPAddr).Port)
 	const protocol = "udp"
 	for {
-		n, addr, err := conn.ReadFromUDP(buf)
+		n, addr, err := conn.ReadFromUDPAddrPort(buf)
 		if err != nil {
 			if !errors.Is(err, net.ErrClosed) {
 				logging.Logger.Warnf("UDP read failed on port %s: %v", portStr, err)
@@ -59,7 +59,7 @@ func (h *UDPHandler) Handle(conn *net.UDPConn) {
 			logging.Logger.Debugf("Received UDP packet from %s", addr)
 		}
 
-		n, err = conn.WriteToUDP(buf[:n], addr)
+		n, err = conn.WriteToUDPAddrPort(buf[:n], addr)
 		if err != nil {
 			if packetSpan != nil {
 				packetSpan.RecordError(err)
