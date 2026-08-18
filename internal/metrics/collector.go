@@ -38,53 +38,75 @@ type MetricsCollector struct {
 	totalUDPSent          uint64
 }
 
-var metricsRegistered = false
+type prometheusMetrics struct {
+	requestsReceived     *prometheus.CounterVec
+	requestsSent         *prometheus.CounterVec
+	bytesReceived        *prometheus.CounterVec
+	bytesSent            *prometheus.CounterVec
+	tcpConnectionsOpened prometheus.Counter
+	udpPacketsReceived   prometheus.Counter
+	activeTCPConnections prometheus.Gauge
+}
 
-// NewMetricsCollector initializes the collector and registers Prometheus metrics.
-func NewMetricsCollector() *MetricsCollector {
-	mc := &MetricsCollector{
-		RequestsReceived: prometheus.NewCounterVec(
+var (
+	defaultMetrics     prometheusMetrics
+	defaultMetricsOnce sync.Once
+)
+
+func newPrometheusMetrics() prometheusMetrics {
+	return prometheusMetrics{
+		requestsReceived: prometheus.NewCounterVec(
 			prometheus.CounterOpts{Name: "requests_received_total", Help: "Total requests received"},
 			[]string{"protocol", "port"},
 		),
-		RequestsSent: prometheus.NewCounterVec(
+		requestsSent: prometheus.NewCounterVec(
 			prometheus.CounterOpts{Name: "requests_sent_total", Help: "Total requests sent"},
 			[]string{"protocol", "port"},
 		),
-		BytesReceived: prometheus.NewCounterVec(
+		bytesReceived: prometheus.NewCounterVec(
 			prometheus.CounterOpts{Name: "bytes_received_total", Help: "Total bytes received"},
 			[]string{"protocol", "port"},
 		),
-		BytesSent: prometheus.NewCounterVec(
+		bytesSent: prometheus.NewCounterVec(
 			prometheus.CounterOpts{Name: "bytes_sent_total", Help: "Total bytes sent"},
 			[]string{"protocol", "port"},
 		),
-		TCPConnectionsOpenedPerSecond: prometheus.NewCounter(
+		tcpConnectionsOpened: prometheus.NewCounter(
 			prometheus.CounterOpts{Name: "tcp_connections_opened_total", Help: "Total TCP connections opened"},
 		),
-		UDPPacketsReceived: prometheus.NewCounter(
+		udpPacketsReceived: prometheus.NewCounter(
 			prometheus.CounterOpts{Name: "udp_packets_received_total", Help: "Total UDP packets received"},
 		),
-		ActiveTCPConnections: prometheus.NewGauge(
+		activeTCPConnections: prometheus.NewGauge(
 			prometheus.GaugeOpts{Name: "active_tcp_connections", Help: "Current active TCP connections"},
 		),
 	}
+}
 
-	// Register Prometheus metrics only once
-	if !metricsRegistered {
+// NewMetricsCollector initializes the collector and registers Prometheus metrics.
+func NewMetricsCollector() *MetricsCollector {
+	defaultMetricsOnce.Do(func() {
+		defaultMetrics = newPrometheusMetrics()
 		prometheus.MustRegister(
-			mc.RequestsReceived,
-			mc.RequestsSent,
-			mc.BytesReceived,
-			mc.BytesSent,
-			mc.TCPConnectionsOpenedPerSecond,
-			mc.UDPPacketsReceived,
-			mc.ActiveTCPConnections,
+			defaultMetrics.requestsReceived,
+			defaultMetrics.requestsSent,
+			defaultMetrics.bytesReceived,
+			defaultMetrics.bytesSent,
+			defaultMetrics.tcpConnectionsOpened,
+			defaultMetrics.udpPacketsReceived,
+			defaultMetrics.activeTCPConnections,
 		)
-		metricsRegistered = true
-	}
+	})
 
-	return mc
+	return &MetricsCollector{
+		RequestsReceived:              defaultMetrics.requestsReceived,
+		RequestsSent:                  defaultMetrics.requestsSent,
+		BytesReceived:                 defaultMetrics.bytesReceived,
+		BytesSent:                     defaultMetrics.bytesSent,
+		TCPConnectionsOpenedPerSecond: defaultMetrics.tcpConnectionsOpened,
+		UDPPacketsReceived:            defaultMetrics.udpPacketsReceived,
+		ActiveTCPConnections:          defaultMetrics.activeTCPConnections,
+	}
 }
 
 // IncRequestsReceived increments requests received counters.
@@ -147,20 +169,10 @@ func (mc *MetricsCollector) SetActiveTCPConnections(n int) {
 
 // updateSyncMap updates a sync.Map with protocol/port counts using pointers.
 func (mc *MetricsCollector) updateSyncMap(m *sync.Map, protocol, port string, delta uint64) {
-	var portsMap *sync.Map
-	if val, ok := m.Load(protocol); ok {
-		portsMap = val.(*sync.Map)
-	} else {
-		portsMap = &sync.Map{}
-		m.Store(protocol, portsMap)
-	}
-	var counter *atomic.Uint64
-	if val, ok := portsMap.Load(port); ok {
-		counter = val.(*atomic.Uint64)
-	} else {
-		counter = &atomic.Uint64{}
-		portsMap.Store(port, counter)
-	}
+	portsValue, _ := m.LoadOrStore(protocol, &sync.Map{})
+	portsMap := portsValue.(*sync.Map)
+	counterValue, _ := portsMap.LoadOrStore(port, &atomic.Uint64{})
+	counter := counterValue.(*atomic.Uint64)
 	counter.Add(delta)
 }
 
