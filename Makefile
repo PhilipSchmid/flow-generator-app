@@ -274,7 +274,7 @@ quick-test: build
 		fi; \
 		printf "$(GREEN)✓ Server started successfully$(NC)\n"; \
 		printf "$(YELLOW)Starting flow generator...$(NC)\n"; \
-		./bin/flow-generator --server localhost --tcp_ports 8080,8081 --udp_ports 9000 --rate 10 --max_duration 5 --metrics_port 9092 > /tmp/flow-generator.log 2>&1 & \
+		./bin/flow-generator --server localhost --tcp_ports 8080,8081 --udp_ports 9000 --protocol both --rate 10 --max_duration 5 --metrics_port 9092 > /tmp/flow-generator.log 2>&1 & \
 		CLIENT_PID=$$!; \
 		printf "$(YELLOW)Running for 10 seconds...$(NC)\n"; \
 		sleep 10; \
