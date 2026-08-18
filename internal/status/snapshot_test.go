@@ -1,6 +1,7 @@
 package status
 
 import (
+	"net"
 	"testing"
 	"time"
 
@@ -56,6 +57,21 @@ func TestClientTrackerIgnoresUnknownPortIndex(t *testing.T) {
 		tracker.FlowStarted(-1)
 		tracker.FlowFailed(42)
 	})
+}
+
+func TestServerTrackerCountsUniqueActiveTCPClientIPs(t *testing.T) {
+	tracker := &ServerTracker{}
+	first := tracker.TCPClientConnected(&net.TCPAddr{IP: net.ParseIP("192.0.2.10"), Port: 40001})
+	second := tracker.TCPClientConnected(&net.TCPAddr{IP: net.ParseIP("192.0.2.10"), Port: 40002})
+	third := tracker.TCPClientConnected(&net.TCPAddr{IP: net.ParseIP("192.0.2.11"), Port: 40003})
+	assert.Equal(t, uint64(2), tracker.ActiveTCPClients())
+
+	tracker.TCPClientDisconnected(first)
+	assert.Equal(t, uint64(2), tracker.ActiveTCPClients())
+	tracker.TCPClientDisconnected(second)
+	assert.Equal(t, uint64(1), tracker.ActiveTCPClients())
+	tracker.TCPClientDisconnected(third)
+	assert.Zero(t, tracker.ActiveTCPClients())
 }
 
 func BenchmarkClientTrackerFlowLifecycle(b *testing.B) {
