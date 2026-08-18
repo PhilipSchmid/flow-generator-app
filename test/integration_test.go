@@ -16,14 +16,16 @@ import (
 )
 
 // findAvailablePort finds an available port for testing
-func findAvailablePort(t *testing.T) int {
+func findAvailablePort(t testing.TB) int {
+	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer func() { _ = listener.Close() }()
 	return listener.Addr().(*net.TCPAddr).Port
 }
 
-func findAvailableUDPPort(t *testing.T) int {
+func findAvailableUDPPort(t testing.TB) int {
+	t.Helper()
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
 	require.NoError(t, err)
 	defer func() { _ = conn.Close() }()
@@ -77,6 +79,7 @@ func TestServerClientIntegration(t *testing.T) {
 		"--udp-ports-server", fmt.Sprintf("%d", udpPort),
 		"--metrics-port", fmt.Sprintf("%d", metricsPort),
 		"--health-port", fmt.Sprintf("%d", healthPort),
+		"--status-port", "0",
 		"--log-level", "error",
 		"--log-format", "json",
 	)
@@ -93,6 +96,7 @@ func TestServerClientIntegration(t *testing.T) {
 
 	// Test TCP client
 	t.Run("TCP Client", func(t *testing.T) {
+		clientMetricsPort := findAvailablePort(t)
 		clientCmd := exec.Command(clientBinary,
 			"--server", "127.0.0.1",
 			"--tcp-ports", fmt.Sprintf("%d", tcpPort),
@@ -102,6 +106,8 @@ func TestServerClientIntegration(t *testing.T) {
 			"--min-duration", "0.1",
 			"--max-duration", "0.2",
 			"--payload-size", "100",
+			"--metrics-port", fmt.Sprintf("%d", clientMetricsPort),
+			"--status-port", "0",
 			"--log-level", "error",
 		)
 
@@ -111,6 +117,7 @@ func TestServerClientIntegration(t *testing.T) {
 
 	// Test UDP client
 	t.Run("UDP Client with legacy flag names", func(t *testing.T) {
+		clientMetricsPort := findAvailablePort(t)
 		clientCmd := exec.Command(clientBinary,
 			"--server", "127.0.0.1",
 			"--udp_ports", fmt.Sprintf("%d", udpPort),
@@ -121,6 +128,8 @@ func TestServerClientIntegration(t *testing.T) {
 			"--min_duration", "0.1",
 			"--max_duration", "0.2",
 			"--payload_size", "100",
+			"--metrics_port", fmt.Sprintf("%d", clientMetricsPort),
+			"--status_port", "0",
 			"--log_level", "error",
 		)
 
@@ -152,6 +161,7 @@ func TestServerTCPEcho(t *testing.T) {
 
 	tcpPort := findAvailablePort(t)
 	healthPort := findAvailablePort(t)
+	metricsPort := findAvailablePort(t)
 	serverBinary := "./test-server-tcp"
 
 	// Build server
@@ -164,6 +174,8 @@ func TestServerTCPEcho(t *testing.T) {
 	serverCmd := exec.Command(serverBinary,
 		"--tcp_ports_server", fmt.Sprintf("%d", tcpPort),
 		"--health_port", fmt.Sprintf("%d", healthPort),
+		"--metrics_port", fmt.Sprintf("%d", metricsPort),
+		"--status_port", "0",
 		"--log_level", "error",
 	)
 
@@ -199,6 +211,7 @@ func TestServerUDPEcho(t *testing.T) {
 
 	udpPort := findAvailableUDPPort(t)
 	healthPort := findAvailablePort(t)
+	metricsPort := findAvailablePort(t)
 	serverBinary := "./test-server-udp"
 
 	// Build server
@@ -209,8 +222,11 @@ func TestServerUDPEcho(t *testing.T) {
 
 	// Start server
 	serverCmd := exec.Command(serverBinary,
+		"--tcp-ports-server", "",
 		"--udp-ports-server", fmt.Sprintf("%d", udpPort),
 		"--health-port", fmt.Sprintf("%d", healthPort),
+		"--metrics-port", fmt.Sprintf("%d", metricsPort),
+		"--status-port", "0",
 		"--log-level", "error",
 	)
 
@@ -249,6 +265,8 @@ func TestMultipleFlows(t *testing.T) {
 	tcpPort2 := findAvailablePort(t)
 	udpPort1 := findAvailableUDPPort(t)
 	healthPort := findAvailablePort(t)
+	metricsPort := findAvailablePort(t)
+	clientMetricsPort := findAvailablePort(t)
 	serverBinary := "./test-server-multi"
 	clientBinary := "./test-client-multi"
 
@@ -268,6 +286,8 @@ func TestMultipleFlows(t *testing.T) {
 		"--tcp-ports-server", fmt.Sprintf("%d,%d", tcpPort1, tcpPort2),
 		"--udp-ports-server", fmt.Sprintf("%d", udpPort1),
 		"--health-port", fmt.Sprintf("%d", healthPort),
+		"--metrics-port", fmt.Sprintf("%d", metricsPort),
+		"--status-port", "0",
 		"--log-level", "error",
 	)
 
@@ -288,6 +308,8 @@ func TestMultipleFlows(t *testing.T) {
 		"--min-duration", "0.1",
 		"--max-duration", "0.3",
 		"--payload-size", "500",
+		"--metrics-port", fmt.Sprintf("%d", clientMetricsPort),
+		"--status-port", "0",
 		"--log-level", "info",
 	)
 
@@ -316,6 +338,9 @@ func BenchmarkTCPFlow(b *testing.B) {
 	require.NoError(b, err)
 	tcpPort := listener.Addr().(*net.TCPAddr).Port
 	_ = listener.Close()
+	metricsPort := findAvailablePort(b)
+	healthPort := findAvailablePort(b)
+	clientMetricsPort := findAvailablePort(b)
 	serverBinary := "./bench-server"
 	clientBinary := "./bench-client"
 
@@ -333,6 +358,9 @@ func BenchmarkTCPFlow(b *testing.B) {
 	// Start server
 	serverCmd := exec.Command(serverBinary,
 		"--tcp-ports-server", fmt.Sprintf("%d", tcpPort),
+		"--metrics-port", fmt.Sprintf("%d", metricsPort),
+		"--health-port", fmt.Sprintf("%d", healthPort),
+		"--status-port", "0",
 		"--log-level", "error",
 	)
 	err = serverCmd.Start()
@@ -353,6 +381,8 @@ func BenchmarkTCPFlow(b *testing.B) {
 			"--min-duration", "0.01",
 			"--max-duration", "0.01",
 			"--payload-size", "1024",
+			"--metrics-port", fmt.Sprintf("%d", clientMetricsPort),
+			"--status-port", "0",
 			"--log-level", "error",
 		)
 
