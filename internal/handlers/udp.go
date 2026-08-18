@@ -1,12 +1,17 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"net"
 	"strconv"
 
 	"github.com/PhilipSchmid/flow-generator-app/internal/logging"
 	"github.com/PhilipSchmid/flow-generator-app/internal/metrics"
+	"github.com/PhilipSchmid/flow-generator-app/internal/tracing"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // UDPHandler handles UDP packets
@@ -40,6 +45,15 @@ func (h *UDPHandler) Handle(conn *net.UDPConn) {
 		h.metricsCollector.IncRequestsReceived(protocol, portStr)
 		h.metricsCollector.IncUDPPacketsReceived()
 		h.metricsCollector.AddBytesReceived(protocol, portStr, n)
+		var packetSpan trace.Span
+		if tracing.Enabled() {
+			_, packetSpan = otel.Tracer("echo-server").Start(context.Background(), "udp.echo")
+			packetSpan.SetAttributes(
+				attribute.String("server.port", portStr),
+				attribute.String("network.transport", protocol),
+				attribute.Int("network.io.bytes", n),
+			)
+		}
 
 		if logging.DebugEnabled() {
 			logging.Logger.Debugf("Received UDP packet from %s", addr)
@@ -47,11 +61,18 @@ func (h *UDPHandler) Handle(conn *net.UDPConn) {
 
 		n, err = conn.WriteToUDP(buf[:n], addr)
 		if err != nil {
+			if packetSpan != nil {
+				packetSpan.RecordError(err)
+				packetSpan.End()
+			}
 			if logging.DebugEnabled() {
 				logging.Logger.Debugf("Failed to write UDP packet to %s: %v", addr, err)
 			}
 			continue
 		}
 		h.metricsCollector.AddBytesSent(protocol, portStr, n)
+		if packetSpan != nil {
+			packetSpan.End()
+		}
 	}
 }

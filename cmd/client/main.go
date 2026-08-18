@@ -21,6 +21,8 @@ import (
 	"github.com/PhilipSchmid/flow-generator-app/internal/version"
 
 	"github.com/spf13/pflag"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // ProtocolPort combines a protocol and its associated port
@@ -109,6 +111,16 @@ func generateFlow(mainCtx context.Context, server string, pp ProtocolPort, durat
 	// Create a context for this flow with its own timeout
 	flowCtx, flowCancel := context.WithTimeout(mainCtx, time.Duration(duration*float64(time.Second)))
 	defer flowCancel()
+	if tracing.Enabled() {
+		_, span := otel.Tracer("flow-generator").Start(flowCtx, "network.flow")
+		span.SetAttributes(
+			attribute.String("network.transport", pp.Protocol),
+			attribute.String("server.address", server),
+			attribute.Int("server.port", pp.Port),
+			attribute.Int("network.io.bytes", payloadSize),
+		)
+		defer span.End()
+	}
 
 	addr := constructAddress(server, pp.Port)
 	portStr := strconv.Itoa(pp.Port)
@@ -315,7 +327,17 @@ func main() {
 	}()
 
 	if cfg.TracingEnabled {
-		tracing.InitTracer("flow-generator", cfg.JaegerEndpoint)
+		tracerProvider, traceErr := tracing.InitTracer(context.Background(), "flow-generator", cfg.JaegerEndpoint)
+		if traceErr != nil {
+			logging.Logger.Fatalf("Failed to initialize tracing: %v", traceErr)
+		}
+		defer func() {
+			ctx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer shutdownCancel()
+			if err := tracing.Shutdown(ctx, tracerProvider); err != nil {
+				logging.Logger.Errorf("Failed to flush tracing: %v", err)
+			}
+		}()
 	}
 
 	server := cfg.Server
