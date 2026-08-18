@@ -1,12 +1,16 @@
 package handlers
 
 import (
+	"context"
 	"io"
 	"net"
 	"strconv"
 
 	"github.com/PhilipSchmid/flow-generator-app/internal/logging"
 	"github.com/PhilipSchmid/flow-generator-app/internal/metrics"
+	"github.com/PhilipSchmid/flow-generator-app/internal/tracing"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // TCPHandler handles TCP connections
@@ -30,7 +34,15 @@ func (h *TCPHandler) Handle(conn net.Conn) {
 
 	port := conn.LocalAddr().(*net.TCPAddr).Port
 	portStr := strconv.Itoa(port)
-	protocol := "tcp"
+	const protocol = "tcp"
+	if tracing.Enabled() {
+		_, span := otel.Tracer("echo-server").Start(context.Background(), "tcp.echo")
+		span.SetAttributes(
+			attribute.Int("server.port", port),
+			attribute.String("network.transport", protocol),
+		)
+		defer span.End()
+	}
 
 	h.metricsCollector.IncRequestsReceived(protocol, portStr)
 	h.metricsCollector.IncTCPConnectionsOpened()

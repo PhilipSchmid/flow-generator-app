@@ -82,8 +82,17 @@ func main() {
 
 	// Initialize tracing if enabled
 	if cfg.TracingEnabled {
-		tracing.InitTracer("echo-server", cfg.JaegerEndpoint)
-		logging.Logger.Info("Tracing enabled")
+		tracerProvider, traceErr := tracing.InitTracer(context.Background(), "echo-server", cfg.JaegerEndpoint)
+		if traceErr != nil {
+			logging.Logger.Fatalf("Failed to initialize tracing: %v", traceErr)
+		}
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := tracing.Shutdown(ctx, tracerProvider); err != nil {
+				logging.Logger.Errorf("Failed to flush tracing: %v", err)
+			}
+		}()
 	}
 
 	// Start metrics server
