@@ -30,6 +30,17 @@ import (
 type ProtocolPort struct {
 	Protocol string
 	Port     int
+	address  string
+	portStr  string
+}
+
+func newProtocolPort(server, protocol string, port int) ProtocolPort {
+	return ProtocolPort{
+		Protocol: protocol,
+		Port:     port,
+		address:  constructAddress(server, port),
+		portStr:  strconv.Itoa(port),
+	}
 }
 
 var payloadCache []byte
@@ -149,11 +160,9 @@ func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics
 		defer span.End()
 	}
 
-	addr := constructAddress(cfg.Server, pp.Port)
-	portStr := strconv.Itoa(pp.Port)
 	dialer := net.Dialer{}
 	if pp.Protocol == "tcp" {
-		conn, err := dialer.DialContext(flowCtx, "tcp", addr)
+		conn, err := dialer.DialContext(flowCtx, "tcp", pp.address)
 		if err != nil {
 			if flowCtx.Err() == nil {
 				logging.Logger.Warnf("Failed to connect to %s:%d (TCP): %v", cfg.Server, pp.Port, err)
@@ -174,8 +183,8 @@ func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics
 			}
 			return
 		}
-		mc.IncRequestsSent("tcp", portStr)
-		mc.AddBytesSent("tcp", portStr, nSent)
+		mc.IncRequestsSent("tcp", pp.portStr)
+		mc.AddBytesSent("tcp", pp.portStr, nSent)
 		mc.IncTCPConnectionsOpened()
 
 		totalReceived := 0
@@ -190,7 +199,7 @@ func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics
 				break
 			}
 			totalReceived += n
-			mc.AddBytesReceived("tcp", portStr, n)
+			mc.AddBytesReceived("tcp", pp.portStr, n)
 		}
 		if totalReceived != payloadSize {
 			if flowCtx.Err() == nil {
@@ -210,7 +219,7 @@ func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics
 			logging.Logger.Debugf("TCP flow to %s:%d ended after %.3f seconds", cfg.Server, pp.Port, duration)
 		}
 	} else { // udp
-		conn, err := dialer.DialContext(flowCtx, "udp", addr)
+		conn, err := dialer.DialContext(flowCtx, "udp", pp.address)
 		if err != nil {
 			if flowCtx.Err() == nil {
 				logging.Logger.Warnf("Failed to connect to %s:%d (UDP): %v", cfg.Server, pp.Port, err)
@@ -243,8 +252,8 @@ func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics
 				}
 				logging.Logger.Warnf("Failed to write to UDP connection: %v", err)
 			} else {
-				mc.IncRequestsSent("udp", portStr)
-				mc.AddBytesSent("udp", portStr, nSent)
+				mc.IncRequestsSent("udp", pp.portStr)
+				mc.AddBytesSent("udp", pp.portStr, nSent)
 
 				deadline := time.Now().Add(time.Second)
 				if flowDeadline, ok := flowCtx.Deadline(); ok && flowDeadline.Before(deadline) {
@@ -262,7 +271,7 @@ func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics
 						logging.Logger.Warnf("Failed to read from UDP connection: %v", readErr)
 					}
 				} else {
-					mc.AddBytesReceived("udp", portStr, nReceived)
+					mc.AddBytesReceived("udp", pp.portStr, nReceived)
 					if nReceived != payloadSize {
 						logging.Logger.Warnf("UDP byte mismatch: sent %d bytes, received %d bytes", payloadSize, nReceived)
 					}
@@ -428,12 +437,12 @@ func main() {
 	var availablePorts []ProtocolPort
 	if cfg.Protocol == "tcp" || cfg.Protocol == "both" {
 		for _, p := range tcpPorts {
-			availablePorts = append(availablePorts, ProtocolPort{"tcp", p})
+			availablePorts = append(availablePorts, newProtocolPort(cfg.Server, "tcp", p))
 		}
 	}
 	if cfg.Protocol == "udp" || cfg.Protocol == "both" {
 		for _, p := range udpPorts {
-			availablePorts = append(availablePorts, ProtocolPort{"udp", p})
+			availablePorts = append(availablePorts, newProtocolPort(cfg.Server, "udp", p))
 		}
 	}
 

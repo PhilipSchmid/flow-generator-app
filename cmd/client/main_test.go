@@ -127,13 +127,12 @@ func TestClientConfiguration(t *testing.T) {
 }
 
 func TestProtocolPort(t *testing.T) {
-	pp := ProtocolPort{
-		Protocol: "tcp",
-		Port:     8080,
-	}
+	pp := newProtocolPort("localhost", "tcp", 8080)
 
 	assert.Equal(t, "tcp", pp.Protocol)
 	assert.Equal(t, 8080, pp.Port)
+	assert.Equal(t, "localhost:8080", pp.address)
+	assert.Equal(t, "8080", pp.portStr)
 }
 
 func TestParsePorts(t *testing.T) {
@@ -197,7 +196,7 @@ func TestGenerateFlow(t *testing.T) {
 	mc := metrics.NewMetricsCollector()
 
 	ctx := context.Background()
-	pp := ProtocolPort{Protocol: "tcp", Port: serverAddr.Port}
+	pp := newProtocolPort("127.0.0.1", "tcp", serverAddr.Port)
 	generateFlow(ctx, testCfg, mc, pp, 0.1)
 
 	assert.True(t, true)
@@ -321,7 +320,7 @@ func TestGenerateFlowStopsWhenParentIsCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		generateFlow(ctx, cfg, metrics.NewMetricsCollector(), ProtocolPort{Protocol: "tcp", Port: listener.Addr().(*net.TCPAddr).Port}, 10)
+		generateFlow(ctx, cfg, metrics.NewMetricsCollector(), newProtocolPort("127.0.0.1", "tcp", listener.Addr().(*net.TCPAddr).Port), 10)
 		close(done)
 	}()
 	serverConn := <-accepted
@@ -345,7 +344,7 @@ func TestGenerateFlowDoesNotWarnAfterCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	for _, protocol := range []string{"tcp", "udp"} {
-		generateFlow(ctx, cfg, metrics.NewMetricsCollector(), ProtocolPort{Protocol: protocol, Port: 1}, 10)
+		generateFlow(ctx, cfg, metrics.NewMetricsCollector(), newProtocolPort("unresolvable.invalid", protocol, 1), 10)
 	}
 
 	assert.Empty(t, recorded.All())
@@ -440,7 +439,7 @@ func BenchmarkGenerateFlow(b *testing.B) {
 	mc := metrics.NewMetricsCollector()
 
 	ctx := context.Background()
-	pp := ProtocolPort{Protocol: "tcp", Port: serverAddr.Port}
+	pp := newProtocolPort("127.0.0.1", "tcp", serverAddr.Port)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -448,4 +447,51 @@ func BenchmarkGenerateFlow(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		generateFlow(ctx, testCfg, mc, pp, 0.01)
 	}
+}
+
+func BenchmarkGenerateUDPFlow(b *testing.B) {
+	listener, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	require.NoError(b, err)
+	defer func() { _ = listener.Close() }()
+
+	go func() {
+		buf := make([]byte, 64*1024)
+		for {
+			n, addr, readErr := listener.ReadFromUDPAddrPort(buf)
+			if readErr != nil {
+				return
+			}
+			_, _ = listener.WriteToUDPAddrPort(buf[:n], addr)
+		}
+	}()
+
+	serverAddr := listener.LocalAddr().(*net.UDPAddr)
+	testCfg := &config.ClientConfig{
+		Server:      "127.0.0.1",
+		PayloadSize: 1024,
+		MTU:         1500,
+		MSS:         1460,
+	}
+	mc := metrics.NewMetricsCollector()
+	pp := newProtocolPort("127.0.0.1", "udp", serverAddr.Port)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		generateFlow(context.Background(), testCfg, mc, pp, 0.01)
+	}
+}
+
+func BenchmarkFlowScheduler10K(b *testing.B) {
+	const flowsPerRun = 1000
+	startedAt := time.Now()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		stats := runFlowScheduler(context.Background(), 10_000, flowsPerRun, flowsPerRun, func(context.Context) {})
+		if stats.started != flowsPerRun || stats.skipped != 0 {
+			b.Fatalf("scheduler started %d flows and skipped %d", stats.started, stats.skipped)
+		}
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(flowsPerRun*b.N)/time.Since(startedAt).Seconds(), "flows/s")
 }
