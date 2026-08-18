@@ -11,6 +11,7 @@ import (
 	"github.com/PhilipSchmid/flow-generator-app/internal/config"
 	"github.com/PhilipSchmid/flow-generator-app/internal/logging"
 	"github.com/PhilipSchmid/flow-generator-app/internal/metrics"
+	statusapi "github.com/PhilipSchmid/flow-generator-app/internal/status"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -204,9 +205,14 @@ func TestGenerateFlow(t *testing.T) {
 
 	ctx := context.Background()
 	pp := newProtocolPort("127.0.0.1", "tcp", serverAddr.Port)
-	generateFlow(ctx, testCfg, mc, pp, 0.1)
-
-	assert.True(t, true)
+	tracker := statusapi.NewClientTracker(1, []statusapi.PortFlowSnapshot{{Protocol: "tcp", Port: serverAddr.Port}})
+	sample := tracker.FlowStarted(0)
+	outcome := generateFlowObserved(ctx, testCfg, mc, pp, 0.1, flowObserver{tracker: tracker, sampleLatency: sample})
+	assert.Equal(t, flowCompleted, outcome)
+	tracker.FlowCompleted()
+	snapshot := tracker.Snapshot()
+	assert.Equal(t, uint64(1), snapshot.FlowsCompleted)
+	assert.Equal(t, uint64(1), snapshot.TCPLatency.Count)
 }
 
 // TestDrainStragglerReplyHalfClosesTCP verifies the real TCP shutdown path:
@@ -325,20 +331,40 @@ func TestGenerateFlowStopsWhenParentIsCanceled(t *testing.T) {
 
 	cfg := &config.ClientConfig{Server: "127.0.0.1", PayloadSize: 64, MTU: 1500, MSS: 1460}
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
+	done := make(chan flowOutcome)
 	go func() {
-		generateFlow(ctx, cfg, metrics.NewMetricsCollector(), newProtocolPort("127.0.0.1", "tcp", listener.Addr().(*net.TCPAddr).Port), 10)
-		close(done)
+		done <- generateFlow(ctx, cfg, metrics.NewMetricsCollector(), newProtocolPort("127.0.0.1", "tcp", listener.Addr().(*net.TCPAddr).Port), 10)
 	}()
 	serverConn := <-accepted
 	defer func() { _ = serverConn.Close() }()
 	cancel()
 
 	select {
-	case <-done:
+	case outcome := <-done:
+		assert.Equal(t, flowCanceled, outcome)
 	case <-time.After(time.Second):
 		t.Fatal("flow did not stop after parent cancellation")
 	}
+}
+
+func TestGenerateUDPFlowRecordsMTUFailure(t *testing.T) {
+	cfg := &config.ClientConfig{Server: "127.0.0.1", PayloadSize: 100, MTU: 50, MSS: 40}
+	tracker := statusapi.NewClientTracker(1, []statusapi.PortFlowSnapshot{{Protocol: "udp", Port: 9000}})
+	tracker.FlowStarted(0)
+	outcome := generateFlowObserved(context.Background(), cfg, metrics.NewMetricsCollector(), newProtocolPort("127.0.0.1", "udp", 9000), 1, flowObserver{tracker: tracker})
+	assert.Equal(t, flowFailed, outcome)
+	tracker.FlowFailed(0)
+	snapshot := tracker.Snapshot()
+	assert.Equal(t, uint64(1), snapshot.FlowsFailed)
+	assert.Equal(t, uint64(1), snapshot.Errors.MTU)
+}
+
+func TestRunFlowSchedulerTracksCapacitySkips(t *testing.T) {
+	tracker := statusapi.NewClientTracker(10_000, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	runFlowSchedulerTracked(ctx, 100_000, 1, 0, func(context.Context) { time.Sleep(20 * time.Millisecond) }, tracker)
+	assert.Greater(t, tracker.Snapshot().StartsSkippedAtCapacity, uint64(0))
 }
 
 func TestGenerateFlowDoesNotWarnAfterCancellation(t *testing.T) {
@@ -351,7 +377,9 @@ func TestGenerateFlowDoesNotWarnAfterCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	for _, protocol := range []string{"tcp", "udp"} {
-		generateFlow(ctx, cfg, metrics.NewMetricsCollector(), newProtocolPort("unresolvable.invalid", protocol, 1), 10)
+		tracker := statusapi.NewClientTracker(1, nil)
+		generateFlowObserved(ctx, cfg, metrics.NewMetricsCollector(), newProtocolPort("unresolvable.invalid", protocol, 1), 10, flowObserver{tracker: tracker})
+		assert.Equal(t, statusapi.ErrorCounts{}, tracker.Snapshot().Errors)
 	}
 
 	assert.Empty(t, recorded.All())

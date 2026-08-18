@@ -171,6 +171,21 @@ func TestSetActiveTCPConnections(t *testing.T) {
 		mc.SetActiveTCPConnections(10)
 		mc.SetActiveTCPConnections(3)
 	})
+	assert.Equal(t, int64(3), mc.Snapshot().ActiveTCPConnections)
+}
+
+func TestSnapshotCombinesPortTraffic(t *testing.T) {
+	mc := testMetricsCollector()
+	mc.IncRequestsSent("tcp", "8080")
+	mc.AddBytesSent("tcp", "8080", 100)
+	mc.AddBytesReceived("tcp", "8080", 90)
+	mc.IncRequestsReceived("udp", "9000")
+	mc.AddBytesReceived("udp", "9000", 50)
+
+	snapshot := mc.Snapshot()
+	require.Len(t, snapshot.Ports, 2)
+	assert.Equal(t, PortSnapshot{Protocol: "tcp", Port: "8080", RequestsSent: 1, BytesReceived: 90, BytesSent: 100}, snapshot.Ports[0])
+	assert.Equal(t, PortSnapshot{Protocol: "udp", Port: "9000", RequestsReceived: 1, BytesReceived: 50}, snapshot.Ports[1])
 }
 
 func TestUpdateSyncMap(t *testing.T) {

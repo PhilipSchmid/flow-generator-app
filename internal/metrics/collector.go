@@ -36,6 +36,29 @@ type MetricsCollector struct {
 	totalTCPReceived      uint64
 	totalUDPReceived      uint64
 	totalUDPSent          uint64
+	activeTCPConnections  atomic.Int64
+}
+
+// PortSnapshot contains cumulative application traffic for one protocol/port.
+type PortSnapshot struct {
+	Protocol         string `json:"protocol"`
+	Port             string `json:"port"`
+	RequestsReceived uint64 `json:"requests_received"`
+	RequestsSent     uint64 `json:"requests_sent"`
+	BytesReceived    uint64 `json:"bytes_received"`
+	BytesSent        uint64 `json:"bytes_sent"`
+}
+
+// Snapshot is an immutable, process-local view of application traffic.
+type Snapshot struct {
+	TotalRequestsReceived uint64         `json:"total_requests_received"`
+	TotalRequestsSent     uint64         `json:"total_requests_sent"`
+	TotalTCPReceived      uint64         `json:"total_tcp_received"`
+	TotalTCPSent          uint64         `json:"total_tcp_sent"`
+	TotalUDPReceived      uint64         `json:"total_udp_received"`
+	TotalUDPSent          uint64         `json:"total_udp_sent"`
+	ActiveTCPConnections  int64          `json:"active_tcp_connections"`
+	Ports                 []PortSnapshot `json:"ports"`
 }
 
 type prometheusMetrics struct {
@@ -168,8 +191,81 @@ func (mc *MetricsCollector) TotalRequestsReceived() uint64 {
 	return atomic.LoadUint64(&mc.totalRequestsReceived)
 }
 
+// IncActiveTCPConnections increments the Prometheus and process-local gauges.
+func (mc *MetricsCollector) IncActiveTCPConnections() {
+	mc.ActiveTCPConnections.Inc()
+	mc.activeTCPConnections.Add(1)
+}
+
+// DecActiveTCPConnections decrements the Prometheus and process-local gauges.
+func (mc *MetricsCollector) DecActiveTCPConnections() {
+	mc.ActiveTCPConnections.Dec()
+	mc.activeTCPConnections.Add(-1)
+}
+
+// SetActiveTCPConnections updates the Prometheus and process-local gauges.
 func (mc *MetricsCollector) SetActiveTCPConnections(n int) {
 	mc.ActiveTCPConnections.Set(float64(n))
+	mc.activeTCPConnections.Store(int64(n))
+}
+
+// Snapshot returns cumulative traffic without reading from Prometheus.
+// It allocates only for the low-frequency status request path.
+func (mc *MetricsCollector) Snapshot() Snapshot {
+	requestsReceived := mc.getSyncMapData(&mc.requestsReceived)
+	requestsSent := mc.getSyncMapData(&mc.requestsSent)
+	bytesReceived := mc.getSyncMapData(&mc.bytesReceived)
+	bytesSent := mc.getSyncMapData(&mc.bytesSent)
+
+	type portKey struct {
+		protocol string
+		port     string
+	}
+	ports := make(map[portKey]*PortSnapshot)
+	add := func(data map[string]map[string]uint64, assign func(*PortSnapshot, uint64)) {
+		for protocol, protocolPorts := range data {
+			for port, value := range protocolPorts {
+				key := portKey{protocol: protocol, port: port}
+				entry := ports[key]
+				if entry == nil {
+					entry = &PortSnapshot{Protocol: protocol, Port: port}
+					ports[key] = entry
+				}
+				assign(entry, value)
+			}
+		}
+	}
+	add(requestsReceived, func(entry *PortSnapshot, value uint64) { entry.RequestsReceived = value })
+	add(requestsSent, func(entry *PortSnapshot, value uint64) { entry.RequestsSent = value })
+	add(bytesReceived, func(entry *PortSnapshot, value uint64) { entry.BytesReceived = value })
+	add(bytesSent, func(entry *PortSnapshot, value uint64) { entry.BytesSent = value })
+
+	portSnapshots := make([]PortSnapshot, 0, len(ports))
+	for _, entry := range ports {
+		portSnapshots = append(portSnapshots, *entry)
+	}
+	sort.Slice(portSnapshots, func(i, j int) bool {
+		if portSnapshots[i].Protocol != portSnapshots[j].Protocol {
+			return portSnapshots[i].Protocol < portSnapshots[j].Protocol
+		}
+		left, leftErr := strconv.Atoi(portSnapshots[i].Port)
+		right, rightErr := strconv.Atoi(portSnapshots[j].Port)
+		if leftErr == nil && rightErr == nil {
+			return left < right
+		}
+		return portSnapshots[i].Port < portSnapshots[j].Port
+	})
+
+	return Snapshot{
+		TotalRequestsReceived: atomic.LoadUint64(&mc.totalRequestsReceived),
+		TotalRequestsSent:     atomic.LoadUint64(&mc.totalRequestsSent),
+		TotalTCPReceived:      atomic.LoadUint64(&mc.totalTCPReceived),
+		TotalTCPSent:          atomic.LoadUint64(&mc.totalTCPSent),
+		TotalUDPReceived:      atomic.LoadUint64(&mc.totalUDPReceived),
+		TotalUDPSent:          atomic.LoadUint64(&mc.totalUDPSent),
+		ActiveTCPConnections:  mc.activeTCPConnections.Load(),
+		Ports:                 portSnapshots,
+	}
 }
 
 // updateSyncMap updates a sync.Map with protocol/port counts using pointers.

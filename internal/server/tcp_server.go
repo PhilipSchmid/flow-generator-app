@@ -8,30 +8,42 @@ import (
 
 	"github.com/PhilipSchmid/flow-generator-app/internal/handlers"
 	"github.com/PhilipSchmid/flow-generator-app/internal/logging"
+	statusmetrics "github.com/PhilipSchmid/flow-generator-app/internal/status"
 )
 
 // TCPServer represents a TCP server
 type TCPServer struct {
-	port     int
-	listener net.Listener
-	handler  *handlers.TCPHandler
-	wg       sync.WaitGroup
-	connsMu  sync.Mutex
-	conns    map[net.Conn]struct{}
-	stopping bool
-	ctx      context.Context
-	cancel   context.CancelFunc
+	port          int
+	listener      net.Listener
+	handler       *handlers.TCPHandler
+	statusTracker *statusmetrics.ServerTracker
+	wg            sync.WaitGroup
+	connsMu       sync.Mutex
+	conns         map[net.Conn]struct{}
+	stopping      bool
+	ctx           context.Context
+	cancel        context.CancelFunc
 }
 
 // NewTCPServer creates a new TCP server
 func NewTCPServer(port int, handler *handlers.TCPHandler) *TCPServer {
+	return newTCPServer(port, handler, nil)
+}
+
+// NewTCPServerWithStatus creates a TCP server with dashboard error counters.
+func NewTCPServerWithStatus(port int, handler *handlers.TCPHandler, tracker *statusmetrics.ServerTracker) *TCPServer {
+	return newTCPServer(port, handler, tracker)
+}
+
+func newTCPServer(port int, handler *handlers.TCPHandler, tracker *statusmetrics.ServerTracker) *TCPServer {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &TCPServer{
-		port:    port,
-		handler: handler,
-		conns:   make(map[net.Conn]struct{}),
-		ctx:     ctx,
-		cancel:  cancel,
+		port:          port,
+		handler:       handler,
+		statusTracker: tracker,
+		conns:         make(map[net.Conn]struct{}),
+		ctx:           ctx,
+		cancel:        cancel,
 	}
 }
 
@@ -83,6 +95,9 @@ func (s *TCPServer) acceptConnections() {
 			case <-s.ctx.Done():
 				return
 			default:
+				if s.statusTracker != nil {
+					s.statusTracker.RecordAcceptError()
+				}
 				logging.Logger.Errorf("Failed to accept TCP connection: %v", err)
 				continue
 			}

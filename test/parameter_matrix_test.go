@@ -1,7 +1,9 @@
 package test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	statusapi "github.com/PhilipSchmid/flow-generator-app/internal/status"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -203,6 +206,60 @@ func TestClientServerParameterMatrix(t *testing.T) {
 		assert.LessOrEqual(t, bytesReceived, float64(flowCount*128))
 	})
 
+	t.Run("live dashboard status for mixed traffic", func(t *testing.T) {
+		tcpPort := findAvailablePort(t)
+		udpPort := findAvailableUDPPort(t)
+		server := startSentinelServer(t, serverBinary,
+			"--tcp-ports-server", strconv.Itoa(tcpPort),
+			"--udp-ports-server", strconv.Itoa(udpPort),
+		)
+
+		usedPorts := map[int]struct{}{tcpPort: {}, udpPort: {}, server.metricsPort: {}, server.statusPort: {}}
+		statusPort := findUniqueSentinelPort(t, usedPorts)
+		usedPorts[statusPort] = struct{}{}
+		metricsPort := findUniqueSentinelPort(t, usedPorts)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, clientBinary,
+			"--server", "127.0.0.1",
+			"--protocol", "both",
+			"--tcp-ports", strconv.Itoa(tcpPort),
+			"--udp-ports", strconv.Itoa(udpPort),
+			"--rate", "100",
+			"--max-concurrent", "200",
+			"--flow-count", "100",
+			"--min-duration", "1",
+			"--max-duration", "1",
+			"--payload-size", "64",
+			"--metrics-port", strconv.Itoa(metricsPort),
+			"--status-port", strconv.Itoa(statusPort),
+			"--log-level", "error",
+		)
+		var output bytes.Buffer
+		cmd.Stdout = &output
+		cmd.Stderr = &output
+		require.NoError(t, cmd.Start())
+		clientSnapshot := waitForSentinelStatus(t, statusPort, func(snapshot statusapi.Snapshot) bool {
+			return snapshot.Client != nil && snapshot.Client.FlowsStarted > 0 &&
+				snapshot.Client.TCPLatency.Count > 0 && snapshot.Client.UDPLatency.Count > 0
+		})
+		assert.Equal(t, "client", clientSnapshot.Role)
+		assert.Equal(t, float64(100), clientSnapshot.Configuration.Rate)
+		assert.Positive(t, clientSnapshot.Client.FlowsActive)
+		assert.Len(t, clientSnapshot.Client.PortFlows, 2)
+
+		err := cmd.Wait()
+		require.NoError(t, err, "client failed: %s", output.String())
+		require.NoError(t, ctx.Err())
+
+		serverSnapshot := waitForSentinelStatus(t, server.statusPort, func(snapshot statusapi.Snapshot) bool {
+			return snapshot.Server != nil && snapshot.Traffic.TotalTCPReceived > 0 && snapshot.Traffic.TotalUDPReceived > 0
+		})
+		assert.Equal(t, "server", serverSnapshot.Role)
+		assert.True(t, serverSnapshot.Server.Ready)
+		assert.True(t, serverSnapshot.Server.Healthy)
+	})
+
 	t.Run("invalid UDP payload is rejected before dialing", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -222,6 +279,7 @@ func TestClientServerParameterMatrix(t *testing.T) {
 
 type sentinelServer struct {
 	metricsPort int
+	statusPort  int
 }
 
 func buildSentinelBinary(t *testing.T, name, packagePath string) string {
@@ -239,10 +297,13 @@ func startSentinelServer(t *testing.T, binary string, protocolArgs ...string) se
 	metricsPort := findUniqueSentinelPort(t, usedPorts)
 	usedPorts[metricsPort] = struct{}{}
 	healthPort := findUniqueSentinelPort(t, usedPorts)
+	usedPorts[healthPort] = struct{}{}
+	statusPort := findUniqueSentinelPort(t, usedPorts)
 	args := append([]string{}, protocolArgs...)
 	args = append(args,
 		"--metrics-port", strconv.Itoa(metricsPort),
 		"--health-port", strconv.Itoa(healthPort),
+		"--status-port", strconv.Itoa(statusPort),
 		"--log-level", "error",
 	)
 
@@ -258,7 +319,7 @@ func startSentinelServer(t *testing.T, binary string, protocolArgs ...string) se
 	})
 
 	waitForReady(t, healthPort)
-	return sentinelServer{metricsPort: metricsPort}
+	return sentinelServer{metricsPort: metricsPort, statusPort: statusPort}
 }
 
 func runSentinelClient(t *testing.T, binary string, args ...string) string {
@@ -266,6 +327,7 @@ func runSentinelClient(t *testing.T, binary string, args ...string) string {
 	metricsPort := findAvailablePort(t)
 	args = append(args,
 		"--metrics-port", strconv.Itoa(metricsPort),
+		"--status-port", "0",
 	)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -274,6 +336,27 @@ func runSentinelClient(t *testing.T, binary string, args ...string) string {
 	require.NoError(t, err, "client failed: %s", string(output))
 	require.NoError(t, ctx.Err())
 	return string(output)
+}
+
+func waitForSentinelStatus(t *testing.T, port int, ready func(statusapi.Snapshot) bool) statusapi.Snapshot {
+	t.Helper()
+	client := http.Client{Timeout: 250 * time.Millisecond}
+	endpoint := fmt.Sprintf("http://127.0.0.1:%d%s", port, statusapi.Path)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		response, err := client.Get(endpoint)
+		if err == nil {
+			var snapshot statusapi.Snapshot
+			decodeErr := json.NewDecoder(response.Body).Decode(&snapshot)
+			_ = response.Body.Close()
+			if response.StatusCode == http.StatusOK && decodeErr == nil && ready(snapshot) {
+				return snapshot
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("status endpoint %s did not become ready", endpoint)
+	return statusapi.Snapshot{}
 }
 
 func sentinelPorts(args []string) map[int]struct{} {
