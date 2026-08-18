@@ -373,6 +373,7 @@ func TestLoadClientConfig(t *testing.T) {
 	assert.Equal(t, "debug", config.LogLevel)
 	assert.Equal(t, "localhost", config.Server) // default value
 	assert.Equal(t, "9091", config.MetricsPort)
+	assert.Equal(t, "both", config.Protocol)
 }
 
 func TestLoadServerConfig(t *testing.T) {
