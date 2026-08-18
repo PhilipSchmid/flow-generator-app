@@ -56,7 +56,7 @@ export FLOW_GENERATOR_LOG_LEVEL=debug
 export FLOW_GENERATOR_METRICS_PORT=9091 # client default; the server defaults to 9090
 ```
 
-Flags override environment variables, which override `config.{yaml,json,toml}` in the current directory, `/etc/flow-generator`, or `~/.flow-generator`.
+Flags override environment variables, which override `config.{yaml,json,toml}` in the current directory, `/etc/flow-generator`, or `~/.flow-generator`. CLI flags use hyphens; the former underscore spellings remain accepted. Environment variables and config keys keep underscores.
 
 ### Server Configuration
 
@@ -65,14 +65,14 @@ Server options for `echo-server` and `ghcr.io/philipschmid/echo-server:latest`:
 | Flag | Environment Variable | Default | Description |
 |------|---------------------|---------|-------------|
 | `--version` | — | `false` | Print version information and exit |
-| `--log_level` | `FLOW_GENERATOR_LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
-| `--log_format` | `FLOW_GENERATOR_LOG_FORMAT` | `human` | Log format (human, json) |
-| `--metrics_port` | `FLOW_GENERATOR_METRICS_PORT` | `9090` | Prometheus metrics port |
-| `--health_port` | `FLOW_GENERATOR_HEALTH_PORT` | `8082` | Health check server port |
-| `--tracing_enabled` | `FLOW_GENERATOR_TRACING_ENABLED` | `false` | Enable OpenTelemetry tracing |
-| `--jaeger_endpoint` | `FLOW_GENERATOR_JAEGER_ENDPOINT` | `http://localhost:4317` | OTLP/gRPC collector URL (`http` is plaintext; `https` uses TLS) |
-| `--tcp_ports_server` | `FLOW_GENERATOR_TCP_PORTS_SERVER` | `8080` | Comma-separated TCP ports |
-| `--udp_ports_server` | `FLOW_GENERATOR_UDP_PORTS_SERVER` | `""` | Comma-separated UDP ports |
+| `--log-level` | `FLOW_GENERATOR_LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
+| `--log-format` | `FLOW_GENERATOR_LOG_FORMAT` | `human` | Log format (human, json) |
+| `--metrics-port` | `FLOW_GENERATOR_METRICS_PORT` | `9090` | Prometheus metrics port |
+| `--health-port` | `FLOW_GENERATOR_HEALTH_PORT` | `8082` | Health check server port |
+| `--tracing-enabled` | `FLOW_GENERATOR_TRACING_ENABLED` | `false` | Enable OpenTelemetry tracing |
+| `--jaeger-endpoint` | `FLOW_GENERATOR_JAEGER_ENDPOINT` | `http://localhost:4317` | OTLP/gRPC collector URL (`http` is plaintext; `https` uses TLS) |
+| `--tcp-ports-server` | `FLOW_GENERATOR_TCP_PORTS_SERVER` | `8080` | Comma-separated TCP ports |
+| `--udp-ports-server` | `FLOW_GENERATOR_UDP_PORTS_SERVER` | `""` | Comma-separated UDP ports |
 
 ### Client Configuration
 
@@ -81,25 +81,25 @@ Client options for `flow-generator` and `ghcr.io/philipschmid/flow-generator:lat
 | Flag | Environment Variable | Default | Description |
 |------|---------------------|---------|-------------|
 | `--version` | — | `false` | Print version information and exit |
-| `--log_level` | `FLOW_GENERATOR_LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
-| `--log_format` | `FLOW_GENERATOR_LOG_FORMAT` | `human` | Log format (human, json) |
-| `--metrics_port` | `FLOW_GENERATOR_METRICS_PORT` | `9091` | Prometheus metrics port |
-| `--tracing_enabled` | `FLOW_GENERATOR_TRACING_ENABLED` | `false` | Enable OpenTelemetry tracing |
-| `--jaeger_endpoint` | `FLOW_GENERATOR_JAEGER_ENDPOINT` | `http://localhost:4317` | OTLP/gRPC collector URL (`http` is plaintext; `https` uses TLS) |
+| `--log-level` | `FLOW_GENERATOR_LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
+| `--log-format` | `FLOW_GENERATOR_LOG_FORMAT` | `human` | Log format (human, json) |
+| `--metrics-port` | `FLOW_GENERATOR_METRICS_PORT` | `9091` | Prometheus metrics port |
+| `--tracing-enabled` | `FLOW_GENERATOR_TRACING_ENABLED` | `false` | Enable OpenTelemetry tracing |
+| `--jaeger-endpoint` | `FLOW_GENERATOR_JAEGER_ENDPOINT` | `http://localhost:4317` | OTLP/gRPC collector URL (`http` is plaintext; `https` uses TLS) |
 | `--server` | `FLOW_GENERATOR_SERVER` | `localhost` | Target server address |
 | `--rate` | `FLOW_GENERATOR_RATE` | `10` | Target flow starts per second |
-| `--max_concurrent` | `FLOW_GENERATOR_MAX_CONCURRENT` | `100` | Maximum concurrent flows |
+| `--max-concurrent` | `FLOW_GENERATOR_MAX_CONCURRENT` | `100` | Maximum concurrent flows |
 | `--protocol` | `FLOW_GENERATOR_PROTOCOL` | `both` | Protocol (tcp, udp, both) |
-| `--tcp_ports` | `FLOW_GENERATOR_TCP_PORTS` | `8080` | Comma-separated TCP ports |
-| `--udp_ports` | `FLOW_GENERATOR_UDP_PORTS` | `""` | Comma-separated UDP ports |
-| `--min_duration` | `FLOW_GENERATOR_MIN_DURATION` | `1.0` | Minimum flow duration (seconds) |
-| `--max_duration` | `FLOW_GENERATOR_MAX_DURATION` | `10.0` | Maximum flow duration (seconds) |
-| `--constant_flows` | `FLOW_GENERATOR_CONSTANT_FLOWS` | `false` | Use a fixed duration of `max_concurrent / rate` instead of a random duration |
-| `--flow_timeout` | `FLOW_GENERATOR_FLOW_TIMEOUT` | `0` | Total runtime limit in seconds (`0` = unlimited) |
-| `--flow_count` | `FLOW_GENERATOR_FLOW_COUNT` | `0` | Number of flows to start (`0` = unlimited) |
-| `--payload_size` | `FLOW_GENERATOR_PAYLOAD_SIZE` | `0` | Fixed payload size in bytes; overrides the range (`0` selects range or 5-byte fallback) |
-| `--min_payload_size` | `FLOW_GENERATOR_MIN_PAYLOAD_SIZE` | `0` | Minimum random payload size; set with `max_payload_size` |
-| `--max_payload_size` | `FLOW_GENERATOR_MAX_PAYLOAD_SIZE` | `0` | Maximum random payload size; set with `min_payload_size` |
+| `--tcp-ports` | `FLOW_GENERATOR_TCP_PORTS` | `8080` | Comma-separated TCP ports |
+| `--udp-ports` | `FLOW_GENERATOR_UDP_PORTS` | `""` | Comma-separated UDP ports |
+| `--min-duration` | `FLOW_GENERATOR_MIN_DURATION` | `1.0` | Minimum flow duration (seconds) |
+| `--max-duration` | `FLOW_GENERATOR_MAX_DURATION` | `10.0` | Maximum flow duration (seconds) |
+| `--constant-flows` | `FLOW_GENERATOR_CONSTANT_FLOWS` | `false` | Use a fixed duration of `max-concurrent / rate` instead of a random duration |
+| `--flow-timeout` | `FLOW_GENERATOR_FLOW_TIMEOUT` | `0` | Total runtime limit in seconds (`0` = unlimited) |
+| `--flow-count` | `FLOW_GENERATOR_FLOW_COUNT` | `0` | Number of flows to start (`0` = unlimited) |
+| `--payload-size` | `FLOW_GENERATOR_PAYLOAD_SIZE` | `0` | Fixed payload size in bytes; overrides the range (`0` selects range or 5-byte fallback) |
+| `--min-payload-size` | `FLOW_GENERATOR_MIN_PAYLOAD_SIZE` | `0` | Minimum random payload size; set with `max-payload-size` |
+| `--max-payload-size` | `FLOW_GENERATOR_MAX_PAYLOAD_SIZE` | `0` | Maximum random payload size; set with `min-payload-size` |
 | `--mtu` | `FLOW_GENERATOR_MTU` | `1500` | Maximum allowed UDP payload size in bytes |
 | `--mss` | `FLOW_GENERATOR_MSS` | `1460` | TCP segmentation warning threshold in bytes |
 
@@ -109,26 +109,26 @@ Client options for `flow-generator` and `ghcr.io/philipschmid/flow-generator:lat
 
 ```bash
 # Start server
-./bin/echo-server --tcp_ports_server=8080
+./bin/echo-server --tcp-ports-server=8080
 
 # Generate flows
-./bin/flow-generator --server=localhost --tcp_ports=8080 --rate=10
+./bin/flow-generator --server=localhost --tcp-ports=8080 --rate=10
 ```
 
 ### Multi-Port Mixed Protocol Test
 
 ```bash
 # Start server with multiple ports
-./bin/echo-server --tcp_ports_server=8080,8443 --udp_ports_server=53,123
+./bin/echo-server --tcp-ports-server=8080,8443 --udp-ports-server=53,123
 
 # Generate mixed traffic
 ./bin/flow-generator \
   --server=localhost \
-  --tcp_ports=8080,8443 \
-  --udp_ports=53,123 \
+  --tcp-ports=8080,8443 \
+  --udp-ports=53,123 \
   --protocol=both \
   --rate=20 \
-  --max_concurrent=200
+  --max-concurrent=200
 ```
 
 ### Kubernetes Deployment
@@ -150,17 +150,17 @@ kubectl apply -f k8s/client-random.yaml
 ```bash
 ./bin/flow-generator \
   --server=localhost \
-  --tcp_ports=8080 \
+  --tcp-ports=8080 \
   --rate=5 \
-  --max_concurrent=50 \
-  --constant_flows=true
+  --max-concurrent=50 \
+  --constant-flows=true
 ```
 
-Starts are paced evenly at `1 / rate` intervals; there is no configurable ramp-up period. If `max_concurrent` is already occupied, that scheduled start is dropped rather than queued. TCP sends and receives one echo per flow, while UDP performs up to one echo exchange per 100 ms per active flow. `rate` is not a packet or bandwidth limit, so high UDP concurrency and payload sizes can saturate a link.
+Starts are paced evenly at `1 / rate` intervals; there is no configurable ramp-up period. If `--max-concurrent` is already occupied, that scheduled start is dropped rather than queued. TCP sends and receives one echo per flow, while UDP performs up to one echo exchange per 100 ms per active flow. `--rate` is not a packet or bandwidth limit, so high UDP concurrency and payload sizes can saturate a link.
 
-In constant mode, each flow lasts `max_concurrent / rate` seconds. The example therefore targets about 5 starts per second and about 50 concurrent flows after warm-up, but ticker timing, connection overhead, errors, and dropped starts make the rate and concurrency approximate rather than exact.
+In constant mode, each flow lasts `max-concurrent / rate` seconds. The example therefore targets about 5 starts per second and about 50 concurrent flows after warm-up, but ticker timing, connection overhead, errors, and dropped starts make the rate and concurrency approximate rather than exact.
 
-`flow_count` stops after the requested number of flows have started and drains them to their individual durations. `flow_timeout`, `SIGINT`, and `SIGTERM` cancel active flows promptly.
+`--flow-count` stops after the requested number of flows have started and drains them to their individual durations. `--flow-timeout`, `SIGINT`, and `SIGTERM` cancel active flows promptly.
 
 ## Monitoring
 
@@ -202,8 +202,8 @@ Key metrics:
 When tracing is enabled, both binaries export OTLP/gRPC spans to `http://localhost:4317` by default:
 
 ```bash
-./bin/echo-server --tracing_enabled=true --jaeger_endpoint=http://localhost:4317
-./bin/flow-generator --server=localhost --tracing_enabled=true --jaeger_endpoint=http://localhost:4317
+./bin/echo-server --tracing-enabled=true --jaeger-endpoint=http://localhost:4317
+./bin/flow-generator --server=localhost --tracing-enabled=true --jaeger-endpoint=http://localhost:4317
 ```
 
 The client creates `network.flow` spans; the server creates `tcp.echo` and `udp.echo` spans. Trace context is not propagated through the raw TCP/UDP payloads, so client and server spans are separate traces.
