@@ -12,6 +12,9 @@ import (
 	"github.com/PhilipSchmid/flow-generator-app/internal/metrics"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestConstructAddress(t *testing.T) {
@@ -330,6 +333,22 @@ func TestGenerateFlowStopsWhenParentIsCanceled(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("flow did not stop after parent cancellation")
 	}
+}
+
+func TestGenerateFlowDoesNotWarnAfterCancellation(t *testing.T) {
+	core, recorded := observer.New(zapcore.WarnLevel)
+	oldLogger := logging.Logger
+	logging.Logger = zap.New(core).Sugar()
+	t.Cleanup(func() { logging.Logger = oldLogger })
+
+	cfg := &config.ClientConfig{Server: "unresolvable.invalid", PayloadSize: 5, MTU: 1500, MSS: 1460}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, protocol := range []string{"tcp", "udp"} {
+		generateFlow(ctx, cfg, metrics.NewMetricsCollector(), ProtocolPort{Protocol: protocol, Port: 1}, 10)
+	}
+
+	assert.Empty(t, recorded.All())
 }
 
 func TestConfigValidation(t *testing.T) {
