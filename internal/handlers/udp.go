@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"net"
 	"strconv"
 
@@ -22,27 +23,33 @@ func NewUDPHandler(mc *metrics.MetricsCollector) *UDPHandler {
 
 // Handle processes UDP packets on the given connection
 func (h *UDPHandler) Handle(conn *net.UDPConn) {
-	buf := make([]byte, 1024)
+	// A UDP datagram can be larger than the client's default MTU. Allocate the
+	// receive buffer once so valid datagrams are never silently truncated.
+	buf := make([]byte, 64*1024)
+	portStr := strconv.Itoa(conn.LocalAddr().(*net.UDPAddr).Port)
+	const protocol = "udp"
 	for {
 		n, addr, err := conn.ReadFromUDP(buf)
 		if err != nil {
-			logging.Logger.Infof("UDP connection closed: %v", err)
+			if !errors.Is(err, net.ErrClosed) {
+				logging.Logger.Warnf("UDP read failed on port %s: %v", portStr, err)
+			}
 			return
 		}
 
-		port := conn.LocalAddr().(*net.UDPAddr).Port
-		portStr := strconv.Itoa(port)
-		protocol := "udp"
-
 		h.metricsCollector.IncRequestsReceived(protocol, portStr)
-		h.metricsCollector.UDPPacketsReceived.Inc()
+		h.metricsCollector.IncUDPPacketsReceived()
 		h.metricsCollector.AddBytesReceived(protocol, portStr, n)
 
-		logging.Logger.Debugf("Received UDP packet from %s", addr.String())
+		if logging.DebugEnabled() {
+			logging.Logger.Debugf("Received UDP packet from %s", addr)
+		}
 
 		n, err = conn.WriteToUDP(buf[:n], addr)
 		if err != nil {
-			logging.Logger.Debugf("Failed to write UDP packet to %s: %v", addr.String(), err)
+			if logging.DebugEnabled() {
+				logging.Logger.Debugf("Failed to write UDP packet to %s: %v", addr, err)
+			}
 			continue
 		}
 		h.metricsCollector.AddBytesSent(protocol, portStr, n)
