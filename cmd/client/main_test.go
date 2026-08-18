@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"net"
-	"sync"
 	"testing"
 	"time"
 
@@ -62,15 +61,19 @@ func TestGetPayloadSize(t *testing.T) {
 			},
 			expected: -1, // Will check range
 		},
+		{
+			name: "equal payload range",
+			cfg: config.ClientConfig{
+				MinPayloadSize: 128,
+				MaxPayloadSize: 128,
+			},
+			expected: 128,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			oldCfg := cfg
-			cfg = &tt.cfg
-			defer func() { cfg = oldCfg }()
-
-			size := getPayloadSize()
+			size := getPayloadSize(&tt.cfg)
 
 			if tt.expected == -1 {
 				assert.GreaterOrEqual(t, size, tt.cfg.MinPayloadSize)
@@ -183,23 +186,16 @@ func TestGenerateFlow(t *testing.T) {
 	serverAddr := listener.Addr().(*net.TCPAddr)
 
 	testCfg := &config.ClientConfig{
+		Server:      "127.0.0.1",
 		PayloadSize: 100,
+		MTU:         1500,
+		MSS:         1460,
 	}
-	oldCfg := cfg
-	cfg = testCfg
-	defer func() { cfg = oldCfg }()
-
-	oldMc := mc
-	mc = metrics.NewMetricsCollector()
-	defer func() { mc = oldMc }()
+	mc := metrics.NewMetricsCollector()
 
 	ctx := context.Background()
 	pp := ProtocolPort{Protocol: "tcp", Port: serverAddr.Port}
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	generateFlow(ctx, "127.0.0.1", pp, 0.1, 1500, 1460, &wg)
-	wg.Wait()
+	generateFlow(ctx, testCfg, mc, pp, 0.1)
 
 	assert.True(t, true)
 }
@@ -294,6 +290,48 @@ func TestMetricsCollectorInterface(t *testing.T) {
 	})
 }
 
+func TestRunFlowSchedulerDrainsFlowCount(t *testing.T) {
+	flowDuration := 75 * time.Millisecond
+	startedAt := time.Now()
+	stats := runFlowScheduler(context.Background(), 1000, 1, 1, func(context.Context) {
+		time.Sleep(flowDuration)
+	})
+
+	assert.True(t, stats.limitReached)
+	assert.Equal(t, uint64(1), stats.started)
+	assert.GreaterOrEqual(t, time.Since(startedAt), flowDuration)
+}
+
+func TestGenerateFlowStopsWhenParentIsCanceled(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = listener.Close() }()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr == nil {
+			accepted <- conn
+		}
+	}()
+
+	cfg := &config.ClientConfig{Server: "127.0.0.1", PayloadSize: 64, MTU: 1500, MSS: 1460}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		generateFlow(ctx, cfg, metrics.NewMetricsCollector(), ProtocolPort{Protocol: "tcp", Port: listener.Addr().(*net.TCPAddr).Port}, 10)
+		close(done)
+	}()
+	serverConn := <-accepted
+	defer func() { _ = serverConn.Close() }()
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("flow did not stop after parent cancellation")
+	}
+}
+
 func TestConfigValidation(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -375,15 +413,12 @@ func BenchmarkGenerateFlow(b *testing.B) {
 	serverAddr := listener.Addr().(*net.TCPAddr)
 
 	testCfg := &config.ClientConfig{
+		Server:      "127.0.0.1",
 		PayloadSize: 1024,
+		MTU:         1500,
+		MSS:         1460,
 	}
-	oldCfg := cfg
-	cfg = testCfg
-	defer func() { cfg = oldCfg }()
-
-	oldMc := mc
-	mc = metrics.NewMetricsCollector()
-	defer func() { mc = oldMc }()
+	mc := metrics.NewMetricsCollector()
 
 	ctx := context.Background()
 	pp := ProtocolPort{Protocol: "tcp", Port: serverAddr.Port}
@@ -392,9 +427,6 @@ func BenchmarkGenerateFlow(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		var wg sync.WaitGroup
-		wg.Add(1)
-		generateFlow(ctx, "127.0.0.1", pp, 0.01, 1500, 1460, &wg)
-		wg.Wait()
+		generateFlow(ctx, testCfg, mc, pp, 0.01)
 	}
 }

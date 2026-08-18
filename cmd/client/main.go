@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"net"
 	"os"
@@ -10,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -32,8 +33,6 @@ type ProtocolPort struct {
 }
 
 var payloadCache []byte
-var cfg *config.ClientConfig
-var mc *metrics.MetricsCollector
 
 // tcpCloseGracePeriod bounds how long we wait to drain a reply that was
 // already in flight when a flow's deadline expired, before closing the
@@ -60,17 +59,42 @@ func constructAddress(server string, port int) string {
 }
 
 // getPayloadSize determines the size of the payload to send
-func getPayloadSize() int {
+func getPayloadSize(cfg *config.ClientConfig) int {
 	if size := cfg.PayloadSize; size > 0 {
 		return size // Fixed size
 	}
 	minSize := cfg.MinPayloadSize
 	maxSize := cfg.MaxPayloadSize
-	if minSize > 0 && maxSize > minSize {
+	if minSize > 0 && maxSize >= minSize {
 		// #nosec G404 - math/rand is sufficient for test data generation
 		return minSize + rand.IntN(maxSize-minSize+1)
 	}
 	return 5 // Default to 5 bytes
+}
+
+func writeFull(conn net.Conn, payload []byte) (int, error) {
+	written := 0
+	for written < len(payload) {
+		n, err := conn.Write(payload[written:])
+		written += n
+		if err != nil {
+			return written, err
+		}
+		if n == 0 {
+			return written, io.ErrShortWrite
+		}
+	}
+	return written, nil
+}
+
+func applyFlowDeadline(ctx context.Context, conn net.Conn) func() {
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
+	stop := context.AfterFunc(ctx, func() {
+		_ = conn.SetDeadline(time.Now())
+	})
+	return func() { _ = stop() }
 }
 
 // drainStragglerReply gives conn a short, bounded grace window to receive a
@@ -97,16 +121,13 @@ func drainStragglerReply(conn net.Conn, buf []byte) {
 }
 
 // generateFlow generates network traffic to the server and reads the echoed response
-func generateFlow(mainCtx context.Context, server string, pp ProtocolPort, duration float64, mtu int, mss int, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	payloadSize := getPayloadSize()
-	if payloadSize > len(payloadCache) {
-		payloadSize = len(payloadCache)
-	}
+func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics.MetricsCollector, pp ProtocolPort, duration float64) {
+	payloadSize := getPayloadSize(cfg)
 	payload := payloadCache[:payloadSize]
 
-	logging.Logger.Debugf("Starting %s flow for %f seconds to %s on port %d with payload size %d bytes", pp.Protocol, duration, server, pp.Port, payloadSize)
+	if logging.DebugEnabled() {
+		logging.Logger.Debugf("Starting %s flow for %.3f seconds to %s on port %d with payload size %d bytes", pp.Protocol, duration, cfg.Server, pp.Port, payloadSize)
+	}
 
 	// Create a context for this flow with its own timeout
 	flowCtx, flowCancel := context.WithTimeout(mainCtx, time.Duration(duration*float64(time.Second)))
@@ -115,58 +136,57 @@ func generateFlow(mainCtx context.Context, server string, pp ProtocolPort, durat
 		_, span := otel.Tracer("flow-generator").Start(flowCtx, "network.flow")
 		span.SetAttributes(
 			attribute.String("network.transport", pp.Protocol),
-			attribute.String("server.address", server),
+			attribute.String("server.address", cfg.Server),
 			attribute.Int("server.port", pp.Port),
 			attribute.Int("network.io.bytes", payloadSize),
 		)
 		defer span.End()
 	}
 
-	addr := constructAddress(server, pp.Port)
+	addr := constructAddress(cfg.Server, pp.Port)
 	portStr := strconv.Itoa(pp.Port)
+	dialer := net.Dialer{}
 	if pp.Protocol == "tcp" {
-		conn, err := net.Dial("tcp", addr)
+		conn, err := dialer.DialContext(flowCtx, "tcp", addr)
 		if err != nil {
-			logging.Logger.Warnf("Failed to connect to %s:%d (TCP): %v", server, pp.Port, err)
+			logging.Logger.Warnf("Failed to connect to %s:%d (TCP): %v", cfg.Server, pp.Port, err)
 			return
 		}
 		defer func() { _ = conn.Close() }()
+		defer applyFlowDeadline(flowCtx, conn)()
 
-		if len(payload) > mss {
-			logging.Logger.Debugf("TCP payload size %d exceeds MSS %d, will be segmented", len(payload), mss)
+		if len(payload) > cfg.MSS && logging.DebugEnabled() {
+			logging.Logger.Debugf("TCP payload size %d exceeds MSS %d; the network stack will segment it", len(payload), cfg.MSS)
 		}
 
-		nSent, err := conn.Write(payload)
+		nSent, err := writeFull(conn, payload)
 		if err != nil {
-			logging.Logger.Warnf("Failed to write to TCP connection: %v", err)
+			if flowCtx.Err() == nil {
+				logging.Logger.Warnf("Failed to write to TCP connection: %v", err)
+			}
 			return
 		}
 		mc.IncRequestsSent("tcp", portStr)
 		mc.AddBytesSent("tcp", portStr, nSent)
-		mc.TCPConnectionsOpenedPerSecond.Inc()
+		mc.IncTCPConnectionsOpened()
 
 		totalReceived := 0
 		buf := make([]byte, 1024)
 		for totalReceived < payloadSize {
-			// Bound each read by the flow's own deadline -- without this, a
-			// stalled or unresponsive server blocks here indefinitely,
-			// leaking the goroutine and its semaphore slot forever instead
-			// of respecting min_duration/max_duration/flow_timeout.
-			if deadline, ok := flowCtx.Deadline(); ok {
-				if err := conn.SetReadDeadline(deadline); err != nil {
-					logging.Logger.Warnf("Failed to set read deadline for TCP connection: %v", err)
-				}
-			}
 			n, err := conn.Read(buf)
 			if err != nil {
-				logging.Logger.Warnf("Failed to read full TCP response: %v", err)
+				if flowCtx.Err() == nil {
+					logging.Logger.Warnf("Failed to read full TCP response: %v", err)
+				}
 				break
 			}
 			totalReceived += n
 			mc.AddBytesReceived("tcp", portStr, n)
 		}
 		if totalReceived != payloadSize {
-			logging.Logger.Warnf("TCP byte mismatch: sent %d bytes, received %d bytes", payloadSize, totalReceived)
+			if flowCtx.Err() == nil {
+				logging.Logger.Warnf("TCP byte mismatch: sent %d bytes, received %d bytes", payloadSize, totalReceived)
+			}
 
 			// The read above broke early (deadline hit or connection error),
 			// so a reply the server already sent may still be in flight.
@@ -176,62 +196,122 @@ func generateFlow(mainCtx context.Context, server string, pp ProtocolPort, durat
 
 		// Wait for the flow's context to be done (timeout or mainCtx cancellation)
 		<-flowCtx.Done()
-		logging.Logger.Debugf("TCP flow to %s:%d ended after %f seconds", server, pp.Port, duration)
+		if logging.DebugEnabled() {
+			logging.Logger.Debugf("TCP flow to %s:%d ended after %.3f seconds", cfg.Server, pp.Port, duration)
+		}
 	} else { // udp
-		localAddr, _ := net.ResolveUDPAddr("udp", ":0")
-		remoteAddr, _ := net.ResolveUDPAddr("udp", addr)
-		conn, err := net.DialUDP("udp", localAddr, remoteAddr)
+		conn, err := dialer.DialContext(flowCtx, "udp", addr)
 		if err != nil {
-			logging.Logger.Warnf("Failed to connect to %s:%d (UDP): %v", server, pp.Port, err)
+			logging.Logger.Warnf("Failed to connect to %s:%d (UDP): %v", cfg.Server, pp.Port, err)
 			return
 		}
 		defer func() { _ = conn.Close() }()
+		defer applyFlowDeadline(flowCtx, conn)()
 
-		if len(payload) > mtu {
+		if len(payload) > cfg.MTU {
 			// Payload size is fixed for the lifetime of this flow, so if it
 			// exceeds the MTU once it exceeds it on every iteration -- retrying
 			// here would busy-loop for the full flow duration instead of
 			// backing off. Fail the whole flow instead.
-			logging.Logger.Warnf("UDP payload size %d exceeds MTU %d, aborting flow", len(payload), mtu)
+			logging.Logger.Warnf("UDP payload size %d exceeds MTU %d, aborting flow", len(payload), cfg.MTU)
 			return
 		}
 
-		startTime := time.Now()
-		for time.Since(startTime) < time.Duration(duration*float64(time.Second)) {
+		buf := make([]byte, payloadSize)
+		cadence := time.NewTimer(100 * time.Millisecond)
+		defer cadence.Stop()
+		for flowCtx.Err() == nil {
 			nSent, err := conn.Write(payload)
-			if err != nil {
-				logging.Logger.Warnf("Failed to write to UDP connection: %v", err)
-				continue
+			if err == nil && nSent != len(payload) {
+				err = io.ErrShortWrite
 			}
-			mc.IncRequestsSent("udp", portStr)
-			mc.AddBytesSent("udp", portStr, nSent)
-
-			buf := make([]byte, payloadSize)
-			if err := conn.SetReadDeadline(time.Now().Add(1 * time.Second)); err != nil {
-				logging.Logger.Warnf("Failed to set read deadline for UDP connection: %v", err)
-			}
-			nReceived, _, err := conn.ReadFromUDP(buf)
 			if err != nil {
-				if err.(net.Error).Timeout() {
-					logging.Logger.Debugf("Timeout waiting for UDP response from %s:%d", server, pp.Port)
-				} else {
-					logging.Logger.Warnf("Failed to read from UDP connection: %v", err)
+				if flowCtx.Err() != nil {
+					return
 				}
+				logging.Logger.Warnf("Failed to write to UDP connection: %v", err)
 			} else {
-				mc.AddBytesReceived("udp", portStr, nReceived)
-				if nReceived != payloadSize {
-					logging.Logger.Warnf("UDP byte mismatch: sent %d bytes, received %d bytes", payloadSize, nReceived)
+				mc.IncRequestsSent("udp", portStr)
+				mc.AddBytesSent("udp", portStr, nSent)
+
+				deadline := time.Now().Add(time.Second)
+				if flowDeadline, ok := flowCtx.Deadline(); ok && flowDeadline.Before(deadline) {
+					deadline = flowDeadline
+				}
+				_ = conn.SetReadDeadline(deadline)
+				nReceived, readErr := conn.Read(buf)
+				if readErr != nil {
+					var netErr net.Error
+					if errors.As(readErr, &netErr) && netErr.Timeout() {
+						if flowCtx.Err() == nil && logging.DebugEnabled() {
+							logging.Logger.Debugf("Timeout waiting for UDP response from %s:%d", cfg.Server, pp.Port)
+						}
+					} else if flowCtx.Err() == nil {
+						logging.Logger.Warnf("Failed to read from UDP connection: %v", readErr)
+					}
+				} else {
+					mc.AddBytesReceived("udp", portStr, nReceived)
+					if nReceived != payloadSize {
+						logging.Logger.Warnf("UDP byte mismatch: sent %d bytes, received %d bytes", payloadSize, nReceived)
+					}
 				}
 			}
 
 			select {
-			case <-time.After(100 * time.Millisecond):
+			case <-cadence.C:
+				cadence.Reset(100 * time.Millisecond)
 			case <-flowCtx.Done():
-				logging.Logger.Debugf("UDP flow to %s:%d canceled", server, pp.Port)
 				return
 			}
 		}
-		logging.Logger.Debugf("UDP flow to %s:%d ended after %f seconds", server, pp.Port, duration)
+	}
+}
+
+type schedulerStats struct {
+	started      uint64
+	skipped      uint64
+	limitReached bool
+}
+
+func runFlowScheduler(ctx context.Context, rate float64, maxConcurrent, flowCount int, launch func(context.Context)) schedulerStats {
+	interval := time.Duration(float64(time.Second) / rate)
+	if interval < time.Nanosecond {
+		interval = time.Nanosecond
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	sem := make(chan struct{}, maxConcurrent)
+	var wg sync.WaitGroup
+	stats := schedulerStats{}
+	wait := func() {
+		wg.Wait()
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			wait()
+			return stats
+		case <-ticker.C:
+			select {
+			case sem <- struct{}{}:
+				stats.started++
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					defer func() { <-sem }()
+					launch(ctx)
+				}()
+				if flowCount > 0 && stats.started >= uint64(flowCount) {
+					stats.limitReached = true
+					wait()
+					return stats
+				}
+			default:
+				stats.skipped++
+			}
+		}
 	}
 }
 
@@ -289,8 +369,7 @@ func main() {
 	}
 
 	// Load configuration
-	var err error
-	cfg, err = config.LoadClientConfig()
+	cfg, err := config.LoadClientConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load configuration: %v\n", err)
 		os.Exit(1)
@@ -303,7 +382,7 @@ func main() {
 		}
 	}()
 
-	mc = metrics.NewMetricsCollector()
+	mc := metrics.NewMetricsCollector()
 	metricsServer, err := metrics.StartMetricsServer(cfg.MetricsPort)
 	if err != nil {
 		logging.Logger.Fatalf("Failed to start metrics server: %v", err)
@@ -314,16 +393,6 @@ func main() {
 		if err := metricsServer.Stop(ctx); err != nil {
 			logging.Logger.Errorf("Failed to stop metrics server: %v", err)
 		}
-	}()
-
-	// Handle termination signals
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-sigChan
-		logging.Logger.Info("Application terminated.")
-		mc.LogMetrics(cfg.LogFormat)
-		os.Exit(0)
 	}()
 
 	if cfg.TracingEnabled {
@@ -340,28 +409,17 @@ func main() {
 		}()
 	}
 
-	server := cfg.Server
-	rate := cfg.Rate
-	maxConcurrent := cfg.MaxConcurrent
-	protocol := cfg.Protocol
-	minDuration := cfg.MinDuration
-	maxDuration := cfg.MaxDuration
-	constantFlows := cfg.ConstantFlows
 	tcpPorts := parsePorts(cfg.TCPPorts)
 	udpPorts := parsePorts(cfg.UDPPorts)
-	mtu := cfg.MTU
-	mss := cfg.MSS
-	flowTimeout := cfg.FlowTimeout
-	flowCount := cfg.FlowCount
 
 	// Build list of available ports
 	var availablePorts []ProtocolPort
-	if protocol == "tcp" || protocol == "both" {
+	if cfg.Protocol == "tcp" || cfg.Protocol == "both" {
 		for _, p := range tcpPorts {
 			availablePorts = append(availablePorts, ProtocolPort{"tcp", p})
 		}
 	}
-	if protocol == "udp" || protocol == "both" {
+	if cfg.Protocol == "udp" || cfg.Protocol == "both" {
 		for _, p := range udpPorts {
 			availablePorts = append(availablePorts, ProtocolPort{"udp", p})
 		}
@@ -372,61 +430,47 @@ func main() {
 		os.Exit(1)
 	}
 
-	var flowCounter uint64
-	var wg sync.WaitGroup
-
-	mainCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	mainCtx := signalCtx
 
 	// Apply flow timeout if set
-	if flowTimeout > 0 {
+	if cfg.FlowTimeout > 0 {
 		var timeoutCancel context.CancelFunc
-		mainCtx, timeoutCancel = context.WithTimeout(mainCtx, time.Duration(flowTimeout*float64(time.Second)))
+		mainCtx, timeoutCancel = context.WithTimeout(mainCtx, time.Duration(cfg.FlowTimeout*float64(time.Second)))
 		defer timeoutCancel()
 	}
 
-	sem := make(chan struct{}, maxConcurrent)
-	ticker := time.NewTicker(time.Duration(1e9/rate) * time.Nanosecond)
-
-	for {
-		select {
-		case <-ticker.C:
-			if flowCount > 0 && atomic.LoadUint64(&flowCounter) >= uint64(flowCount) {
-				logging.Logger.Info("Flow count limit reached, stopping flow generation")
-				cancel() // Stop generating new flows
-				continue
-			}
-			select {
-			case sem <- struct{}{}:
-				// Increment flow counter atomically
-				atomic.AddUint64(&flowCounter, 1)
-				wg.Add(1) // Track this flow
-				go func() {
-					defer func() { <-sem }()
-					// #nosec G404 - math/rand is sufficient for flow scheduling randomization
-					pp := availablePorts[rand.IntN(len(availablePorts))]
-					var duration float64
-					if constantFlows {
-						duration = float64(maxConcurrent) / rate
-						if duration < minDuration {
-							logging.Logger.Warnf("Duration %f less than min_duration %f; adjusting max_concurrent may be required", duration, minDuration)
-						}
-					} else {
-						// #nosec G404 - math/rand is sufficient for flow scheduling randomization
-						duration = minDuration + rand.Float64()*(maxDuration-minDuration)
-					}
-					generateFlow(mainCtx, server, pp, duration, mtu, mss, &wg)
-				}()
-			default:
-				logging.Logger.Debugf("Max concurrent flows (%d) reached, skipping flow generation", maxConcurrent)
-			}
-		case <-mainCtx.Done():
-			ticker.Stop()
-			logging.Logger.Info("Flow generation stopped, waiting for active flows to complete")
-			wg.Wait() // Wait for all active flows to finish
-			logging.Logger.Info("All flows completed")
-			mc.LogMetrics(cfg.LogFormat) // Log metrics after flows complete
-			return
-		}
+	constantDuration := float64(cfg.MaxConcurrent) / cfg.Rate
+	if cfg.ConstantFlows && constantDuration < cfg.MinDuration {
+		logging.Logger.Warnf("Constant flow duration %.3fs is below min_duration %.3fs; increase max_concurrent or lower rate", constantDuration, cfg.MinDuration)
 	}
+	logging.Logger.Infow("Flow generation started",
+		"rate", cfg.Rate,
+		"max_concurrent", cfg.MaxConcurrent,
+		"protocol", cfg.Protocol,
+		"constant_flows", cfg.ConstantFlows,
+	)
+
+	stats := runFlowScheduler(mainCtx, cfg.Rate, cfg.MaxConcurrent, cfg.FlowCount, func(ctx context.Context) {
+		// #nosec G404 - math/rand is sufficient for flow scheduling randomization
+		pp := availablePorts[rand.IntN(len(availablePorts))]
+		duration := constantDuration
+		if !cfg.ConstantFlows {
+			// #nosec G404 - math/rand is sufficient for flow scheduling randomization
+			duration = cfg.MinDuration + rand.Float64()*(cfg.MaxDuration-cfg.MinDuration)
+		}
+		generateFlow(ctx, cfg, mc, pp, duration)
+	})
+
+	if stats.limitReached {
+		logging.Logger.Info("Flow count limit reached; final flows drained")
+	} else {
+		logging.Logger.Info("Flow generation canceled; active flows stopped")
+	}
+	logging.Logger.Infow("Flow generation completed",
+		"flows_started", stats.started,
+		"starts_skipped_at_capacity", stats.skipped,
+	)
+	mc.LogMetrics(cfg.LogFormat)
 }
