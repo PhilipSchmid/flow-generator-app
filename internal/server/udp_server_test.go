@@ -34,19 +34,13 @@ func TestUDPServerStartStop(t *testing.T) {
 	mc := metrics.NewMetricsCollector()
 	handler := handlers.NewUDPHandler(mc)
 
-	// Find available port
-	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
-	require.NoError(t, err)
-	conn, err := net.ListenUDP("udp", addr)
-	require.NoError(t, err)
-	port := conn.LocalAddr().(*net.UDPAddr).Port
-	_ = conn.Close()
-
-	server := NewUDPServer(port, handler)
+	server := NewUDPServer(0, handler)
 
 	// Start server
-	err = server.Start()
+	err := server.Start()
 	require.NoError(t, err)
+	port := server.Port()
+	require.NotZero(t, port)
 
 	// Verify server is listening by sending a packet
 	clientConn, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", port))
@@ -85,20 +79,13 @@ func TestUDPServerHandlePackets(t *testing.T) {
 	mc := metrics.NewMetricsCollector()
 	handler := handlers.NewUDPHandler(mc)
 
-	// Find available port
-	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
-	require.NoError(t, err)
-	conn, err := net.ListenUDP("udp", addr)
-	require.NoError(t, err)
-	port := conn.LocalAddr().(*net.UDPAddr).Port
-	_ = conn.Close()
-
-	server := NewUDPServer(port, handler)
+	server := NewUDPServer(0, handler)
 
 	// Start server
-	err = server.Start()
+	err := server.Start()
 	require.NoError(t, err)
 	defer func() { _ = server.Stop() }()
+	port := server.Port()
 
 	// Connect and send data
 	clientConn, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", port))
@@ -122,20 +109,13 @@ func TestUDPServerConcurrentPackets(t *testing.T) {
 	mc := metrics.NewMetricsCollector()
 	handler := handlers.NewUDPHandler(mc)
 
-	// Find available port
-	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
-	require.NoError(t, err)
-	conn, err := net.ListenUDP("udp", addr)
-	require.NoError(t, err)
-	port := conn.LocalAddr().(*net.UDPAddr).Port
-	_ = conn.Close()
-
-	server := NewUDPServer(port, handler)
+	server := NewUDPServer(0, handler)
 
 	// Start server
-	err = server.Start()
+	err := server.Start()
 	require.NoError(t, err)
 	defer func() { _ = server.Stop() }()
+	port := server.Port()
 
 	// Send multiple packets concurrently
 	numPackets := 10
@@ -193,18 +173,11 @@ func BenchmarkUDPServerPacket(b *testing.B) {
 	mc := metrics.NewMetricsCollector()
 	handler := handlers.NewUDPHandler(mc)
 
-	// Find available port
-	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
-	require.NoError(b, err)
-	conn, err := net.ListenUDP("udp", addr)
-	require.NoError(b, err)
-	port := conn.LocalAddr().(*net.UDPAddr).Port
-	_ = conn.Close()
-
-	server := NewUDPServer(port, handler)
-	err = server.Start()
+	server := NewUDPServer(0, handler)
+	err := server.Start()
 	require.NoError(b, err)
 	defer func() { _ = server.Stop() }()
+	port := server.Port()
 
 	clientConn, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", port))
 	require.NoError(b, err)

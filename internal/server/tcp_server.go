@@ -43,6 +43,7 @@ func (s *TCPServer) Start() error {
 		return fmt.Errorf("failed to listen on TCP port %d: %w", s.port, err)
 	}
 	s.listener = listener
+	s.port = listener.Addr().(*net.TCPAddr).Port
 
 	logging.Logger.Infof("TCP server listening on port %d", s.port)
 

@@ -34,17 +34,13 @@ func TestTCPServerStartStop(t *testing.T) {
 	mc := metrics.NewMetricsCollector()
 	handler := handlers.NewTCPHandler(mc)
 
-	// Find available port
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	port := listener.Addr().(*net.TCPAddr).Port
-	_ = listener.Close()
-
-	server := NewTCPServer(port, handler)
+	server := NewTCPServer(0, handler)
 
 	// Start server
-	err = server.Start()
+	err := server.Start()
 	require.NoError(t, err)
+	port := server.Port()
+	require.NotZero(t, port)
 
 	// Verify server is listening
 	conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
@@ -85,18 +81,13 @@ func TestTCPServerHandleConnections(t *testing.T) {
 	mc := metrics.NewMetricsCollector()
 	handler := handlers.NewTCPHandler(mc)
 
-	// Find available port
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	port := listener.Addr().(*net.TCPAddr).Port
-	_ = listener.Close()
-
-	server := NewTCPServer(port, handler)
+	server := NewTCPServer(0, handler)
 
 	// Start server
-	err = server.Start()
+	err := server.Start()
 	require.NoError(t, err)
 	defer func() { _ = server.Stop() }()
+	port := server.Port()
 
 	// Connect and send data
 	conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
@@ -120,18 +111,13 @@ func TestTCPServerConcurrentConnections(t *testing.T) {
 	mc := metrics.NewMetricsCollector()
 	handler := handlers.NewTCPHandler(mc)
 
-	// Find available port
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	port := listener.Addr().(*net.TCPAddr).Port
-	_ = listener.Close()
-
-	server := NewTCPServer(port, handler)
+	server := NewTCPServer(0, handler)
 
 	// Start server
-	err = server.Start()
+	err := server.Start()
 	require.NoError(t, err)
 	defer func() { _ = server.Stop() }()
+	port := server.Port()
 
 	// Create multiple concurrent connections
 	numConnections := 10
@@ -190,7 +176,7 @@ func TestTCPServerStopClosesIdleConnections(t *testing.T) {
 	server := NewTCPServer(0, handlers.NewTCPHandler(mc))
 	require.NoError(t, server.Start())
 
-	port := server.listener.Addr().(*net.TCPAddr).Port
+	port := server.Port()
 	conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	require.NoError(t, err)
 	defer func() { _ = conn.Close() }()
@@ -214,16 +200,11 @@ func BenchmarkTCPServerRoundTrip(b *testing.B) {
 	mc := metrics.NewMetricsCollector()
 	handler := handlers.NewTCPHandler(mc)
 
-	// Find available port
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(b, err)
-	port := listener.Addr().(*net.TCPAddr).Port
-	_ = listener.Close()
-
-	server := NewTCPServer(port, handler)
-	err = server.Start()
+	server := NewTCPServer(0, handler)
+	err := server.Start()
 	require.NoError(b, err)
 	defer func() { _ = server.Stop() }()
+	port := server.Port()
 
 	testData := make([]byte, 1024)
 	buf := make([]byte, 1024)
