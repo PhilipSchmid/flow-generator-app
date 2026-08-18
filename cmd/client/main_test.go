@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"net"
 	"sync"
 	"testing"
@@ -203,35 +204,58 @@ func TestGenerateFlow(t *testing.T) {
 	assert.True(t, true)
 }
 
-// TestDrainStragglerReplyAbsorbsLateData verifies drainStragglerReply reads
-// a reply that arrives after the caller's own read loop already gave up,
-// instead of returning immediately and leaving the caller to Close() a
-// socket with a peer reply still in flight -- the exact condition that
-// makes the kernel answer with RST instead of a clean FIN (observed live
-// via Hubble as synchronized RST bursts across a whole batch of otherwise
-// healthy flows sharing the same fixed duration).
-func TestDrainStragglerReplyAbsorbsLateData(t *testing.T) {
-	client, server := net.Pipe()
-	defer func() { _ = client.Close() }()
+// TestDrainStragglerReplyHalfClosesTCP verifies the real TCP shutdown path:
+// the peer sees a clean EOF from CloseWrite, can still send its final reply,
+// and the client drains that reply before returning.
+func TestDrainStragglerReplyHalfClosesTCP(t *testing.T) {
+	listener, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("127.0.0.1")})
+	require.NoError(t, err)
+	defer func() { _ = listener.Close() }()
 
-	written := make(chan error, 1)
+	type serverResult struct {
+		deadlineErr error
+		readErr     error
+		writeErr    error
+	}
+
+	accepted := make(chan struct{})
+	result := make(chan serverResult, 1)
 	go func() {
-		// Simulate the server's reply landing after the client already gave
-		// up reading, but well within the drain's grace window.
-		time.Sleep(tcpCloseGracePeriod / 4)
-		_, err := server.Write([]byte("late"))
-		written <- err
+		conn, acceptErr := listener.AcceptTCP()
+		if acceptErr != nil {
+			result <- serverResult{readErr: acceptErr}
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		close(accepted)
+
+		deadlineErr := conn.SetReadDeadline(time.Now().Add(2 * tcpCloseGracePeriod))
+		_, readErr := conn.Read(make([]byte, 1))
+		if readErr != io.EOF {
+			result <- serverResult{deadlineErr: deadlineErr, readErr: readErr}
+			return
+		}
+
+		_, writeErr := conn.Write([]byte("late"))
+		result <- serverResult{deadlineErr: deadlineErr, readErr: readErr, writeErr: writeErr}
 	}()
+
+	client, err := net.DialTCP("tcp", nil, listener.Addr().(*net.TCPAddr))
+	require.NoError(t, err)
+	defer func() { _ = client.Close() }()
+	<-accepted
 
 	buf := make([]byte, 16)
 	drainStragglerReply(client, buf)
 
-	select {
-	case err := <-written:
-		require.NoError(t, err, "server should have been able to write its late reply")
-	case <-time.After(2 * time.Second):
-		t.Fatal("server's late write never completed -- drainStragglerReply likely returned without draining")
-	}
+	server := <-result
+	require.NoError(t, server.deadlineErr)
+	require.ErrorIs(t, server.readErr, io.EOF, "server should observe the client's FIN, not a reset")
+	require.NoError(t, server.writeErr, "server should be able to send after the client half-closes")
+
+	n, err := client.Read(buf)
+	require.Zero(t, n, "drain should consume the server's final reply")
+	require.ErrorIs(t, err, io.EOF)
 }
 
 // TestDrainStragglerReplyBoundedWhenPeerSilent verifies drainStragglerReply
