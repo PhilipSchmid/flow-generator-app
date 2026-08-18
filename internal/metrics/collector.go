@@ -169,9 +169,15 @@ func (mc *MetricsCollector) SetActiveTCPConnections(n int) {
 
 // updateSyncMap updates a sync.Map with protocol/port counts using pointers.
 func (mc *MetricsCollector) updateSyncMap(m *sync.Map, protocol, port string, delta uint64) {
-	portsValue, _ := m.LoadOrStore(protocol, &sync.Map{})
+	portsValue, ok := m.Load(protocol)
+	if !ok {
+		portsValue, _ = m.LoadOrStore(protocol, &sync.Map{})
+	}
 	portsMap := portsValue.(*sync.Map)
-	counterValue, _ := portsMap.LoadOrStore(port, &atomic.Uint64{})
+	counterValue, ok := portsMap.Load(port)
+	if !ok {
+		counterValue, _ = portsMap.LoadOrStore(port, &atomic.Uint64{})
+	}
 	counter := counterValue.(*atomic.Uint64)
 	counter.Add(delta)
 }
