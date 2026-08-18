@@ -21,8 +21,8 @@ This project provides a server and client to generate network flows (TCP and UDP
 # Run the echo server
 docker run -p 8080:8080 -p 8082:8082 -p 9090:9090 ghcr.io/philipschmid/echo-server:latest
 
-# Run the flow generator
-docker run ghcr.io/philipschmid/flow-generator:latest --server host.docker.internal
+# Run the flow generator and publish its metrics endpoint
+docker run -p 9091:9091 ghcr.io/philipschmid/flow-generator:latest --server host.docker.internal
 ```
 
 ### Building from Source
