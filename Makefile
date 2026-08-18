@@ -161,7 +161,7 @@ test-coverage:
 ## benchmark: Run benchmarks
 benchmark:
 	@printf "$(BLUE)Running benchmarks...$(NC)\n"
-	@$(GO) test -bench=. -benchmem ./...
+	@$(GO) test -run '^$$' -bench=. -benchmem ./...
 	@printf "$(GREEN)✓ Benchmarks completed$(NC)\n"
 
 ## lint: Run linters
