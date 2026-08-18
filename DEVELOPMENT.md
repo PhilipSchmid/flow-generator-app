@@ -214,7 +214,7 @@ Common failures:
 - **Connection refused**: confirm the server address, protocol, and port match the client.
 - **Dropped starts**: raise `max-concurrent`, shorten flow duration, or lower `rate`.
 
-Run `bin/dashboard` in a third terminal while developing locally. It auto-detects the default status port. The model keeps 15 minutes of one-second samples in memory; no history is written to disk. Use `--color=never` for deterministic render debugging.
+Run `bin/dashboard` in a third terminal while developing locally. It auto-detects the default status port. The model keeps 15 minutes of one-second samples in memory; no history is written to disk. Press `Space` to pause sampling, `r` to refresh, `?` or `F1` for help, and `q` or `F10` to quit. Use `--color=never` for deterministic render debugging.
 
 ## Performance Checks
 
