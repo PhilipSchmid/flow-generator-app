@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"math"
 	"os"
 	"testing"
 
@@ -134,6 +135,45 @@ func TestClientConfigValidate(t *testing.T) {
 			},
 			wantErr: true,
 			errMsg:  "server address cannot be empty",
+		},
+		{
+			name: "NaN rate",
+			config: ClientConfig{
+				CommonConfig: CommonConfig{
+					LogLevel:  "info",
+					LogFormat: "json",
+				},
+				Server: "localhost",
+				Rate:   math.NaN(),
+			},
+			wantErr: true,
+			errMsg:  "rate must be finite",
+		},
+		{
+			name: "positive infinite rate",
+			config: ClientConfig{
+				CommonConfig: CommonConfig{
+					LogLevel:  "info",
+					LogFormat: "json",
+				},
+				Server: "localhost",
+				Rate:   math.Inf(1),
+			},
+			wantErr: true,
+			errMsg:  "rate must be finite",
+		},
+		{
+			name: "negative infinite rate",
+			config: ClientConfig{
+				CommonConfig: CommonConfig{
+					LogLevel:  "info",
+					LogFormat: "json",
+				},
+				Server: "localhost",
+				Rate:   math.Inf(-1),
+			},
+			wantErr: true,
+			errMsg:  "rate must be finite",
 		},
 		{
 			name: "negative rate",
