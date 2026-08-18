@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"testing"
@@ -14,6 +15,37 @@ import (
 
 func init() {
 	logging.InitLogger("json", "error")
+}
+
+func TestUDPHandlerPreservesLargeDatagrams(t *testing.T) {
+	mc := metrics.NewMetricsCollector()
+	handler := NewUDPHandler(mc)
+
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	require.NoError(t, err)
+	done := make(chan struct{})
+	go func() {
+		handler.Handle(conn)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		_ = conn.Close()
+		<-done
+	})
+
+	client, err := net.DialUDP("udp", nil, conn.LocalAddr().(*net.UDPAddr))
+	require.NoError(t, err)
+	defer func() { _ = client.Close() }()
+
+	payload := bytes.Repeat([]byte("x"), 4096)
+	_, err = client.Write(payload)
+	require.NoError(t, err)
+	require.NoError(t, client.SetReadDeadline(time.Now().Add(time.Second)))
+
+	echo := make([]byte, len(payload))
+	n, err := client.Read(echo)
+	require.NoError(t, err)
+	require.Equal(t, payload, echo[:n])
 }
 
 func TestNewUDPHandler(t *testing.T) {
