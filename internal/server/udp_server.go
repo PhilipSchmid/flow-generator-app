@@ -43,6 +43,7 @@ func (s *UDPServer) Start() error {
 		return fmt.Errorf("failed to listen on UDP port %d: %w", s.port, err)
 	}
 	s.conn = conn
+	s.port = conn.LocalAddr().(*net.UDPAddr).Port
 
 	logging.Logger.Infof("UDP server listening on port %d", s.port)
 
