@@ -73,12 +73,12 @@ func TestServerClientIntegration(t *testing.T) {
 
 	// Start server
 	serverCmd := exec.Command(serverBinary,
-		"--tcp_ports_server", fmt.Sprintf("%d", tcpPort),
-		"--udp_ports_server", fmt.Sprintf("%d", udpPort),
-		"--metrics_port", fmt.Sprintf("%d", metricsPort),
-		"--health_port", fmt.Sprintf("%d", healthPort),
-		"--log_level", "error",
-		"--log_format", "json",
+		"--tcp-ports-server", fmt.Sprintf("%d", tcpPort),
+		"--udp-ports-server", fmt.Sprintf("%d", udpPort),
+		"--metrics-port", fmt.Sprintf("%d", metricsPort),
+		"--health-port", fmt.Sprintf("%d", healthPort),
+		"--log-level", "error",
+		"--log-format", "json",
 	)
 
 	var serverOutput bytes.Buffer
@@ -95,14 +95,14 @@ func TestServerClientIntegration(t *testing.T) {
 	t.Run("TCP Client", func(t *testing.T) {
 		clientCmd := exec.Command(clientBinary,
 			"--server", "127.0.0.1",
-			"--tcp_ports", fmt.Sprintf("%d", tcpPort),
+			"--tcp-ports", fmt.Sprintf("%d", tcpPort),
 			"--rate", "10",
-			"--max_concurrent", "2",
-			"--flow_count", "5",
-			"--min_duration", "0.1",
-			"--max_duration", "0.2",
-			"--payload_size", "100",
-			"--log_level", "error",
+			"--max-concurrent", "2",
+			"--flow-count", "5",
+			"--min-duration", "0.1",
+			"--max-duration", "0.2",
+			"--payload-size", "100",
+			"--log-level", "error",
 		)
 
 		output, err := clientCmd.CombinedOutput()
@@ -110,7 +110,7 @@ func TestServerClientIntegration(t *testing.T) {
 	})
 
 	// Test UDP client
-	t.Run("UDP Client", func(t *testing.T) {
+	t.Run("UDP Client with legacy flag names", func(t *testing.T) {
 		clientCmd := exec.Command(clientBinary,
 			"--server", "127.0.0.1",
 			"--udp_ports", fmt.Sprintf("%d", udpPort),
@@ -160,7 +160,7 @@ func TestServerTCPEcho(t *testing.T) {
 	require.NoError(t, err, "Failed to build server: %s", string(output))
 	defer func() { _ = os.Remove(serverBinary) }()
 
-	// Start server
+	// Keep the old underscore spellings covered for existing deployments.
 	serverCmd := exec.Command(serverBinary,
 		"--tcp_ports_server", fmt.Sprintf("%d", tcpPort),
 		"--health_port", fmt.Sprintf("%d", healthPort),
@@ -209,9 +209,9 @@ func TestServerUDPEcho(t *testing.T) {
 
 	// Start server
 	serverCmd := exec.Command(serverBinary,
-		"--udp_ports_server", fmt.Sprintf("%d", udpPort),
-		"--health_port", fmt.Sprintf("%d", healthPort),
-		"--log_level", "error",
+		"--udp-ports-server", fmt.Sprintf("%d", udpPort),
+		"--health-port", fmt.Sprintf("%d", healthPort),
+		"--log-level", "error",
 	)
 
 	err = serverCmd.Start()
@@ -265,10 +265,10 @@ func TestMultipleFlows(t *testing.T) {
 
 	// Start server with multiple ports
 	serverCmd := exec.Command(serverBinary,
-		"--tcp_ports_server", fmt.Sprintf("%d,%d", tcpPort1, tcpPort2),
-		"--udp_ports_server", fmt.Sprintf("%d", udpPort1),
-		"--health_port", fmt.Sprintf("%d", healthPort),
-		"--log_level", "error",
+		"--tcp-ports-server", fmt.Sprintf("%d,%d", tcpPort1, tcpPort2),
+		"--udp-ports-server", fmt.Sprintf("%d", udpPort1),
+		"--health-port", fmt.Sprintf("%d", healthPort),
+		"--log-level", "error",
 	)
 
 	err = serverCmd.Start()
@@ -280,15 +280,15 @@ func TestMultipleFlows(t *testing.T) {
 	// Run client with multiple flows
 	clientCmd := exec.Command(clientBinary,
 		"--server", "127.0.0.1",
-		"--tcp_ports", fmt.Sprintf("%d,%d", tcpPort1, tcpPort2),
-		"--udp_ports", fmt.Sprintf("%d", udpPort1),
+		"--tcp-ports", fmt.Sprintf("%d,%d", tcpPort1, tcpPort2),
+		"--udp-ports", fmt.Sprintf("%d", udpPort1),
 		"--rate", "20",
-		"--max_concurrent", "5",
-		"--flow_count", "10",
-		"--min_duration", "0.1",
-		"--max_duration", "0.3",
-		"--payload_size", "500",
-		"--log_level", "info",
+		"--max-concurrent", "5",
+		"--flow-count", "10",
+		"--min-duration", "0.1",
+		"--max-duration", "0.3",
+		"--payload-size", "500",
+		"--log-level", "info",
 	)
 
 	output, err = clientCmd.CombinedOutput()
@@ -332,8 +332,8 @@ func BenchmarkTCPFlow(b *testing.B) {
 
 	// Start server
 	serverCmd := exec.Command(serverBinary,
-		"--tcp_ports_server", fmt.Sprintf("%d", tcpPort),
-		"--log_level", "error",
+		"--tcp-ports-server", fmt.Sprintf("%d", tcpPort),
+		"--log-level", "error",
 	)
 	err = serverCmd.Start()
 	require.NoError(b, err)
@@ -346,14 +346,14 @@ func BenchmarkTCPFlow(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		clientCmd := exec.Command(clientBinary,
 			"--server", "127.0.0.1",
-			"--tcp_ports", fmt.Sprintf("%d", tcpPort),
+			"--tcp-ports", fmt.Sprintf("%d", tcpPort),
 			"--rate", "100",
-			"--max_concurrent", "10",
-			"--flow_count", "1",
-			"--min_duration", "0.01",
-			"--max_duration", "0.01",
-			"--payload_size", "1024",
-			"--log_level", "error",
+			"--max-concurrent", "10",
+			"--flow-count", "1",
+			"--min-duration", "0.01",
+			"--max-duration", "0.01",
+			"--payload-size", "1024",
+			"--log-level", "error",
 		)
 
 		err := clientCmd.Run()

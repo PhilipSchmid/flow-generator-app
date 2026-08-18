@@ -18,6 +18,14 @@ const (
 	maxFlowRate    = 1_000_000_000
 )
 
+// NormalizeFlagNames makes kebab-case canonical while keeping legacy
+// snake_case command-line flags working as aliases.
+func NormalizeFlagNames(flags *pflag.FlagSet) {
+	flags.SetNormalizeFunc(func(_ *pflag.FlagSet, name string) pflag.NormalizedName {
+		return pflag.NormalizedName(strings.ReplaceAll(name, "_", "-"))
+	})
+}
+
 // CommonConfig holds configuration fields shared between client and server.
 type CommonConfig struct {
 	LogLevel       string
@@ -209,8 +217,8 @@ func LoadClientConfig() (*ClientConfig, error) {
 	initViper()
 	setClientDefaults()
 
-	// Bind command-line flags
-	if err := viper.BindPFlags(pflag.CommandLine); err != nil {
+	// Bind kebab-case flags to the existing snake_case configuration keys.
+	if err := bindFlags(pflag.CommandLine); err != nil {
 		return nil, fmt.Errorf("failed to bind command-line flags: %w", err)
 	}
 
@@ -254,8 +262,8 @@ func LoadServerConfig() (*ServerConfig, error) {
 	initViper()
 	setServerDefaults()
 
-	// Bind command-line flags
-	if err := viper.BindPFlags(pflag.CommandLine); err != nil {
+	// Bind kebab-case flags to the existing snake_case configuration keys.
+	if err := bindFlags(pflag.CommandLine); err != nil {
 		return nil, fmt.Errorf("failed to bind command-line flags: %w", err)
 	}
 
@@ -279,6 +287,20 @@ func LoadServerConfig() (*ServerConfig, error) {
 	}
 
 	return config, nil
+}
+
+func bindFlags(flags *pflag.FlagSet) error {
+	var bindErr error
+	flags.VisitAll(func(flag *pflag.Flag) {
+		if bindErr != nil {
+			return
+		}
+		key := strings.ReplaceAll(flag.Name, "-", "_")
+		if err := viper.BindPFlag(key, flag); err != nil {
+			bindErr = fmt.Errorf("failed to bind --%s: %w", flag.Name, err)
+		}
+	})
+	return bindErr
 }
 
 // initViper initializes viper with common settings

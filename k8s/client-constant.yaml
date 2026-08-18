@@ -29,10 +29,10 @@ spec:
         image: ghcr.io/philipschmid/flow-generator:main
         args:
         - "--server=echo-service"
-        - "--tcp_ports=8080"
+        - "--tcp-ports=8080"
         - "--rate=5"
-        - "--max_concurrent=50"
-        - "--constant_flows=true"
+        - "--max-concurrent=50"
+        - "--constant-flows=true"
         ports:
         - containerPort: 9091
           name: metrics
