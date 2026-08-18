@@ -5,6 +5,7 @@ import (
 	"net"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/PhilipSchmid/flow-generator-app/internal/config"
 	"github.com/PhilipSchmid/flow-generator-app/internal/logging"
@@ -200,6 +201,58 @@ func TestGenerateFlow(t *testing.T) {
 	wg.Wait()
 
 	assert.True(t, true)
+}
+
+// TestDrainStragglerReplyAbsorbsLateData verifies drainStragglerReply reads
+// a reply that arrives after the caller's own read loop already gave up,
+// instead of returning immediately and leaving the caller to Close() a
+// socket with a peer reply still in flight -- the exact condition that
+// makes the kernel answer with RST instead of a clean FIN (observed live
+// via Hubble as synchronized RST bursts across a whole batch of otherwise
+// healthy flows sharing the same fixed duration).
+func TestDrainStragglerReplyAbsorbsLateData(t *testing.T) {
+	client, server := net.Pipe()
+	defer func() { _ = client.Close() }()
+
+	written := make(chan error, 1)
+	go func() {
+		// Simulate the server's reply landing after the client already gave
+		// up reading, but well within the drain's grace window.
+		time.Sleep(tcpCloseGracePeriod / 4)
+		_, err := server.Write([]byte("late"))
+		written <- err
+	}()
+
+	buf := make([]byte, 16)
+	drainStragglerReply(client, buf)
+
+	select {
+	case err := <-written:
+		require.NoError(t, err, "server should have been able to write its late reply")
+	case <-time.After(2 * time.Second):
+		t.Fatal("server's late write never completed -- drainStragglerReply likely returned without draining")
+	}
+}
+
+// TestDrainStragglerReplyBoundedWhenPeerSilent verifies drainStragglerReply
+// returns once its grace window elapses instead of blocking indefinitely
+// when the peer never replies at all.
+func TestDrainStragglerReplyBoundedWhenPeerSilent(t *testing.T) {
+	client, server := net.Pipe()
+	defer func() { _ = client.Close() }()
+	defer func() { _ = server.Close() }()
+
+	done := make(chan struct{})
+	go func() {
+		drainStragglerReply(client, make([]byte, 16))
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(tcpCloseGracePeriod + 500*time.Millisecond):
+		t.Fatal("drainStragglerReply did not return within its grace window")
+	}
 }
 
 func TestMetricsCollectorInterface(t *testing.T) {

@@ -33,6 +33,11 @@ var payloadCache []byte
 var cfg *config.ClientConfig
 var mc *metrics.MetricsCollector
 
+// tcpCloseGracePeriod bounds how long we wait to drain a reply that was
+// already in flight when a flow's deadline expired, before closing the
+// socket. Keeps closes clean (FIN) instead of racing the peer into an RST.
+const tcpCloseGracePeriod = 200 * time.Millisecond
+
 // init initializes the payload cache with random bytes
 func init() {
 	payloadCache = make([]byte, 1<<20) // 1MB
@@ -64,6 +69,29 @@ func getPayloadSize() int {
 		return minSize + rand.IntN(maxSize-minSize+1)
 	}
 	return 5 // Default to 5 bytes
+}
+
+// drainStragglerReply gives conn a short, bounded grace window to receive a
+// reply that was already in flight when the caller's read loop broke out
+// (deadline hit or read error). Closing a TCP socket while data the peer
+// already sent is still arriving makes the kernel answer with RST instead
+// of a clean FIN -- indistinguishable from a real failure in Hubble/tcpdump,
+// and observed live as synchronized RST bursts across an entire batch of
+// otherwise-healthy flows sharing the same fixed flow duration. Half-closes
+// the write side first (nothing left to send) so the peer sees FIN promptly
+// instead of waiting out its own read timeout.
+func drainStragglerReply(conn net.Conn, buf []byte) {
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		_ = tcpConn.CloseWrite()
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(tcpCloseGracePeriod)); err != nil {
+		return
+	}
+	for {
+		if _, err := conn.Read(buf); err != nil {
+			return
+		}
+	}
 }
 
 // generateFlow generates network traffic to the server and reads the echoed response
@@ -127,6 +155,11 @@ func generateFlow(mainCtx context.Context, server string, pp ProtocolPort, durat
 		}
 		if totalReceived != payloadSize {
 			logging.Logger.Warnf("TCP byte mismatch: sent %d bytes, received %d bytes", payloadSize, totalReceived)
+
+			// The read above broke early (deadline hit or connection error),
+			// so a reply the server already sent may still be in flight.
+			// Drain it before Close() -- see drainStragglerReply.
+			drainStragglerReply(conn, buf)
 		}
 
 		// Wait for the flow's context to be done (timeout or mainCtx cancellation)
