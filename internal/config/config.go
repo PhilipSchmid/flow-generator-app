@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"strconv"
@@ -100,6 +101,9 @@ func (c *ClientConfig) Validate() error {
 		return fmt.Errorf("server address cannot be empty")
 	}
 
+	if math.IsNaN(c.Rate) || math.IsInf(c.Rate, 0) {
+		return fmt.Errorf("rate must be finite")
+	}
 	if c.Rate <= 0 {
 		return fmt.Errorf("rate must be positive")
 	}
