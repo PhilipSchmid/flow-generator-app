@@ -20,3 +20,19 @@ func TestReleaseNotesUseImmutableImageTags(t *testing.T) {
 	require.NotContains(t, releaseNotes, ":latest")
 	require.Equal(t, 2, strings.Count(releaseNotes, ":${CURRENT_TAG}"))
 }
+
+func TestDockerContextExcludesLocalArtifacts(t *testing.T) {
+	contents, err := os.ReadFile("../.dockerignore")
+	require.NoError(t, err)
+
+	patterns := strings.Fields(string(contents))
+	for _, pattern := range []string{
+		".git/",
+		"bin/",
+		"coverage/",
+		"echo-server",
+		"flow-generator",
+	} {
+		require.Contains(t, patterns, pattern)
+	}
+}
