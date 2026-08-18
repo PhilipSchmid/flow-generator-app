@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"os"
 	"testing"
 
@@ -9,6 +10,44 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestNormalizeFlagNames(t *testing.T) {
+	flags := pflag.NewFlagSet("test", pflag.ContinueOnError)
+	NormalizeFlagNames(flags)
+	maxConcurrent := flags.Int("max-concurrent", 0, "Maximum concurrent flows")
+
+	require.NoError(t, flags.Parse([]string{"--max_concurrent", "42"}))
+	assert.Equal(t, 42, *maxConcurrent)
+
+	var help bytes.Buffer
+	flags.SetOutput(&help)
+	flags.PrintDefaults()
+	assert.Contains(t, help.String(), "--max-concurrent")
+	assert.NotContains(t, help.String(), "--max_concurrent")
+}
+
+func TestLoadClientConfigAcceptsFlagSeparators(t *testing.T) {
+	for _, flagName := range []string{"--max-concurrent", "--max_concurrent"} {
+		t.Run(flagName, func(t *testing.T) {
+			viper.Reset()
+			oldFlags := pflag.CommandLine
+			t.Cleanup(func() {
+				pflag.CommandLine = oldFlags
+				viper.Reset()
+			})
+
+			flags := pflag.NewFlagSet("test", pflag.ContinueOnError)
+			NormalizeFlagNames(flags)
+			flags.Int("max-concurrent", 0, "Maximum concurrent flows")
+			require.NoError(t, flags.Parse([]string{flagName, "42"}))
+			pflag.CommandLine = flags
+
+			cfg, err := LoadClientConfig()
+			require.NoError(t, err)
+			assert.Equal(t, 42, cfg.MaxConcurrent)
+		})
+	}
+}
 
 func TestCommonConfigValidate(t *testing.T) {
 	tests := []struct {

@@ -28,8 +28,8 @@ spec:
       - name: echo-server
         image: ghcr.io/philipschmid/echo-server:main
         args:
-        - "--tcp_ports_server=8080,8443"
-        - "--udp_ports_server=53,123"
+        - "--tcp-ports-server=8080,8443"
+        - "--udp-ports-server=53,123"
         ports:
         - containerPort: 8080
           protocol: TCP

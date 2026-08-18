@@ -29,13 +29,13 @@ spec:
         image: ghcr.io/philipschmid/flow-generator:main
         args:
         - "--server=echo-service"
-        - "--tcp_ports=8080,8443"
-        - "--udp_ports=53,123"
+        - "--tcp-ports=8080,8443"
+        - "--udp-ports=53,123"
         - "--rate=20"
-        - "--max_concurrent=200"
+        - "--max-concurrent=200"
         - "--protocol=both"
-        - "--min_duration=1"
-        - "--max_duration=5"
+        - "--min-duration=1"
+        - "--max-duration=5"
         ports:
         - containerPort: 9091
           name: metrics

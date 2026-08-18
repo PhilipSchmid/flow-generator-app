@@ -43,16 +43,18 @@ func parsePorts(portsStr string) []int {
 }
 
 func main() {
+	config.NormalizeFlagNames(pflag.CommandLine)
+
 	// Define command-line flags
 	versionFlag := pflag.Bool("version", false, "Print version information and exit")
-	pflag.String("log_level", "", "Log level: debug, info, warn, error")
-	pflag.String("log_format", "", "Log format: human or json")
-	pflag.String("metrics_port", "", "Port for the metrics server")
-	pflag.String("health_port", "", "Port for the health check server")
-	pflag.Bool("tracing_enabled", false, "Enable tracing")
-	pflag.String("jaeger_endpoint", "", "Jaeger endpoint")
-	pflag.String("tcp_ports_server", "", "Comma-separated list of TCP ports")
-	pflag.String("udp_ports_server", "", "Comma-separated list of UDP ports")
+	pflag.String("log-level", "", "Log level: debug, info, warn, error")
+	pflag.String("log-format", "", "Log format: human or json")
+	pflag.String("metrics-port", "", "Port for the metrics server")
+	pflag.String("health-port", "", "Port for the health check server")
+	pflag.Bool("tracing-enabled", false, "Enable tracing")
+	pflag.String("jaeger-endpoint", "", "Jaeger endpoint")
+	pflag.String("tcp-ports-server", "", "Comma-separated list of TCP ports")
+	pflag.String("udp-ports-server", "", "Comma-separated list of UDP ports")
 
 	// Parse flags
 	pflag.Parse()
