@@ -139,7 +139,9 @@ func TestConcurrentLogging(t *testing.T) {
 }
 
 func BenchmarkLogging(b *testing.B) {
-	InitLogger("json", "info")
+	oldLogger := Logger
+	Logger = zap.NewNop().Sugar()
+	b.Cleanup(func() { Logger = oldLogger })
 
 	b.Run("Simple", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
@@ -161,6 +163,18 @@ func BenchmarkLogging(b *testing.B) {
 			Logger.Infof("benchmark iteration %d", i)
 		}
 	})
+}
+
+func TestDebugEnabled(t *testing.T) {
+	oldLogger := Logger
+	t.Cleanup(func() { Logger = oldLogger })
+
+	Logger = zap.NewNop().Sugar()
+	assert.False(t, DebugEnabled())
+
+	core, _ := observer.New(zapcore.DebugLevel)
+	Logger = zap.New(core).Sugar()
+	assert.True(t, DebugEnabled())
 }
 
 func TestLoggerPanic(t *testing.T) {

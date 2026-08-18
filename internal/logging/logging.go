@@ -8,7 +8,9 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-var Logger *zap.SugaredLogger
+// Logger is always safe to use. InitLogger replaces the no-op logger during
+// application startup.
+var Logger = zap.NewNop().Sugar()
 
 // getLogLevel converts a string level to a zapcore.Level
 func getLogLevel(level string) zapcore.Level {
@@ -41,6 +43,9 @@ func InitLogger(logFormat string, logLevel string) {
 	}
 
 	cfg.Level = zap.NewAtomicLevelAt(getLogLevel(logLevel))
+	// Repeated network failures can otherwise make logging the bottleneck. Keep
+	// the first messages for diagnosis, then sample identical log sites.
+	cfg.Sampling = &zap.SamplingConfig{Initial: 100, Thereafter: 100}
 
 	// Build the logger
 	logger, err := cfg.Build()
@@ -50,6 +55,11 @@ func InitLogger(logFormat string, logLevel string) {
 
 	// Assign the sugared logger
 	Logger = logger.Sugar()
+}
+
+// DebugEnabled lets hot paths avoid constructing debug-only values.
+func DebugEnabled() bool {
+	return Logger != nil && Logger.Desugar().Core().Enabled(zap.DebugLevel)
 }
 
 // SyncLogger safely syncs the logger, handling CI environment issues
