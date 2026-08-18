@@ -34,6 +34,12 @@ type ProtocolPort struct {
 
 var payloadCache []byte
 
+const tcpReadBufferSize = 1024
+
+var tcpReadBufferPool = sync.Pool{
+	New: func() any { return new([tcpReadBufferSize]byte) },
+}
+
 // tcpCloseGracePeriod bounds how long we wait to drain a reply that was
 // already in flight when a flow's deadline expired, before closing the
 // socket. Keeps closes clean (FIN) instead of racing the peer into an RST.
@@ -173,7 +179,8 @@ func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics
 		mc.IncTCPConnectionsOpened()
 
 		totalReceived := 0
-		buf := make([]byte, 1024)
+		readBuffer := tcpReadBufferPool.Get().(*[tcpReadBufferSize]byte)
+		buf := readBuffer[:]
 		for totalReceived < payloadSize {
 			n, err := conn.Read(buf)
 			if err != nil {
@@ -195,6 +202,7 @@ func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics
 			// Drain it before Close() -- see drainStragglerReply.
 			drainStragglerReply(conn, buf)
 		}
+		tcpReadBufferPool.Put(readBuffer)
 
 		// Wait for the flow's context to be done (timeout or mainCtx cancellation)
 		<-flowCtx.Done()
