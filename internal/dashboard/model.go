@@ -10,8 +10,9 @@ import (
 var windows = []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute}
 
 type fetchResult struct {
-	snapshot statusapi.Snapshot
-	err      error
+	snapshot        statusapi.Snapshot
+	err             error
+	continueRefresh bool
 }
 
 type refreshMsg time.Time
@@ -29,6 +30,7 @@ type Model struct {
 	dark        bool
 	color       bool
 	showHelp    bool
+	paused      bool
 }
 
 func NewModel(client *Client, color bool) Model {
@@ -36,7 +38,7 @@ func NewModel(client *Client, color bool) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.fetch(), tea.RequestBackgroundColor)
+	return tea.Batch(m.fetch(true), tea.RequestBackgroundColor)
 }
 
 func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
@@ -47,15 +49,19 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.dark = message.IsDark()
 	case tea.KeyPressMsg:
 		switch message.String() {
-		case "q", "ctrl+c":
+		case "q", "ctrl+c", "f10":
 			return m, tea.Quit
-		case "left", "h":
+		case "left", "h", "shift+tab":
 			if m.windowIndex > 0 {
 				m.windowIndex--
+			} else if message.String() == "shift+tab" {
+				m.windowIndex = len(windows) - 1
 			}
-		case "right", "l":
+		case "right", "l", "tab":
 			if m.windowIndex < len(windows)-1 {
 				m.windowIndex++
+			} else if message.String() == "tab" {
+				m.windowIndex = 0
 			}
 		case "1":
 			m.windowIndex = 0
@@ -63,8 +69,15 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.windowIndex = 1
 		case "0":
 			m.windowIndex = 2
-		case "?":
+		case "?", "f1":
 			m.showHelp = !m.showHelp
+		case "space":
+			m.paused = !m.paused
+			if !m.paused {
+				return m, m.fetch(false)
+			}
+		case "r":
+			return m, m.fetch(false)
 		}
 	case fetchResult:
 		if message.err != nil {
@@ -77,9 +90,15 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			copy := message.snapshot
 			m.snapshot = &copy
 		}
-		return m, tea.Tick(time.Second, func(now time.Time) tea.Msg { return refreshMsg(now) })
+		if message.continueRefresh {
+			return m, tea.Tick(time.Second, func(now time.Time) tea.Msg { return refreshMsg(now) })
+		}
+		return m, nil
 	case refreshMsg:
-		return m, m.fetch()
+		if m.paused {
+			return m, tea.Tick(time.Second, func(now time.Time) tea.Msg { return refreshMsg(now) })
+		}
+		return m, m.fetch(true)
 	}
 	return m, nil
 }
@@ -92,10 +111,10 @@ func (m Model) View() tea.View {
 	return view
 }
 
-func (m Model) fetch() tea.Cmd {
+func (m Model) fetch(continueRefresh bool) tea.Cmd {
 	return func() tea.Msg {
 		snapshot, err := m.client.Fetch()
-		return fetchResult{snapshot: snapshot, err: err}
+		return fetchResult{snapshot: snapshot, err: err, continueRefresh: continueRefresh}
 	}
 }
 
