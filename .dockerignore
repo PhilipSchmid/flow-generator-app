@@ -1,7 +1,12 @@
 .github/
+.git/
 README.md
 LICENSE
 CODEOWNER
 Dockerfile.*
 .gitignore
 Makefile
+bin/
+coverage/
+echo-server
+flow-generator
