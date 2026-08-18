@@ -127,6 +127,7 @@ jobs:
           mkdir -p dist/${{ matrix.os }}_${{ matrix.arch }}
           go build -trimpath -ldflags="-s -w" -o dist/${{ matrix.os }}_${{ matrix.arch }}/echo-server ./cmd/server
           go build -trimpath -ldflags="-s -w" -o dist/${{ matrix.os }}_${{ matrix.arch }}/flow-generator ./cmd/client
+          go build -trimpath -ldflags="-s -w" -o dist/${{ matrix.os }}_${{ matrix.arch }}/dashboard ./cmd/dashboard
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7

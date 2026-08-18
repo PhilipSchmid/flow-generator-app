@@ -28,7 +28,7 @@ COVERAGE_DIR := coverage
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 BINARY_EXT := $(if $(filter windows,$(GOOS)),.exe,)
 
-.PHONY: all help deps generate build build-server build-client build-all \
+.PHONY: all help deps generate build build-server build-client build-dashboard build-all \
 	build-platform test test-verbose test-race test-coverage benchmark lint fmt \
 	vet mod-tidy clean docker-build docker-push docker-run docker-stop \
 	install-tools dev-server dev-client quick-test
@@ -51,6 +51,7 @@ help:
 	@printf "  $(GREEN)build-all$(NC)        Build binaries for all platforms\n"
 	@printf "  $(GREEN)build-server$(NC)     Build server binary only\n"
 	@printf "  $(GREEN)build-client$(NC)     Build client binary only\n"
+	@printf "  $(GREEN)build-dashboard$(NC)  Build dashboard binary only\n"
 	@printf "\n"
 	@printf "$(YELLOW)Test targets:$(NC)\n"
 	@printf "  $(GREEN)test$(NC)             Run tests\n"
@@ -90,7 +91,7 @@ generate:
 	@printf "$(GREEN)✓ Code generation completed$(NC)\n"
 
 ## build: Build binaries for current platform
-build: build-server build-client
+build: build-server build-client build-dashboard
 	@printf "$(GREEN)✓ All binaries built successfully$(NC)\n"
 
 ## build-server: Build server binary
@@ -115,6 +116,17 @@ build-client:
 		-o $(BIN_DIR)/flow-generator ./cmd/client
 	@printf "$(GREEN)✓ Client binary built: $(BIN_DIR)/flow-generator$(NC)\n"
 
+## build-dashboard: Build dashboard binary
+build-dashboard:
+	@printf "$(BLUE)Building dashboard binary...$(NC)\n"
+	@mkdir -p $(BIN_DIR)
+	@$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS) \
+		-X github.com/PhilipSchmid/flow-generator-app/internal/version.Version=$(VERSION) \
+		-X github.com/PhilipSchmid/flow-generator-app/internal/version.BuildDate=$(BUILD_DATE) \
+		-X github.com/PhilipSchmid/flow-generator-app/internal/version.GitCommit=$(GIT_COMMIT)" \
+		-o $(BIN_DIR)/dashboard ./cmd/dashboard
+	@printf "$(GREEN)✓ Dashboard binary built: $(BIN_DIR)/dashboard$(NC)\n"
+
 ## build-all: Build binaries for all platforms
 build-all:
 	@printf "$(BLUE)Building binaries for all platforms...$(NC)\n"
@@ -136,6 +148,11 @@ build-platform:
 		-X github.com/PhilipSchmid/flow-generator-app/internal/version.BuildDate=$(BUILD_DATE) \
 		-X github.com/PhilipSchmid/flow-generator-app/internal/version.GitCommit=$(GIT_COMMIT)" \
 		-o $(BIN_DIR)/$(PLATFORM)/flow-generator$(BINARY_EXT) ./cmd/client
+	@GOOS=$(GOOS) GOARCH=$(GOARCH) $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS) \
+		-X github.com/PhilipSchmid/flow-generator-app/internal/version.Version=$(VERSION) \
+		-X github.com/PhilipSchmid/flow-generator-app/internal/version.BuildDate=$(BUILD_DATE) \
+		-X github.com/PhilipSchmid/flow-generator-app/internal/version.GitCommit=$(GIT_COMMIT)" \
+		-o $(BIN_DIR)/$(PLATFORM)/dashboard$(BINARY_EXT) ./cmd/dashboard
 
 ## test: Run tests
 test:
