@@ -185,6 +185,52 @@ func TestClientConfigValidate(t *testing.T) {
 			wantErr: true,
 			errMsg:  "MSS must be less than MTU",
 		},
+		{
+			name: "selected protocol has no ports",
+			config: ClientConfig{
+				CommonConfig: CommonConfig{LogLevel: "info", LogFormat: "json"},
+				Server:       "localhost", Rate: 10, MaxConcurrent: 10,
+				Protocol: "udp", MinDuration: 1, MaxDuration: 2,
+				TCPPorts: "8080", MTU: 1500, MSS: 1460,
+			},
+			wantErr: true,
+			errMsg:  "udp_ports must be specified",
+		},
+		{
+			name: "invalid port list",
+			config: ClientConfig{
+				CommonConfig: CommonConfig{LogLevel: "info", LogFormat: "json"},
+				Server:       "localhost", Rate: 10, MaxConcurrent: 10,
+				Protocol: "tcp", MinDuration: 1, MaxDuration: 2,
+				TCPPorts: "8080,bad", MTU: 1500, MSS: 1460,
+			},
+			wantErr: true,
+			errMsg:  "tcp_ports contains invalid port",
+		},
+		{
+			name: "payload exceeds cache",
+			config: ClientConfig{
+				CommonConfig: CommonConfig{LogLevel: "info", LogFormat: "json"},
+				Server:       "localhost", Rate: 10, MaxConcurrent: 10,
+				Protocol: "tcp", MinDuration: 1, MaxDuration: 2,
+				TCPPorts: "8080", PayloadSize: maxPayloadSize + 1,
+				MTU: 1500, MSS: 1460,
+			},
+			wantErr: true,
+			errMsg:  "payload sizes cannot exceed",
+		},
+		{
+			name: "UDP payload exceeds MTU",
+			config: ClientConfig{
+				CommonConfig: CommonConfig{LogLevel: "info", LogFormat: "json"},
+				Server:       "localhost", Rate: 10, MaxConcurrent: 10,
+				Protocol: "udp", MinDuration: 1, MaxDuration: 2,
+				UDPPorts: "9000", PayloadSize: 1501,
+				MTU: 1500, MSS: 1460,
+			},
+			wantErr: true,
+			errMsg:  "UDP payload size cannot exceed MTU",
+		},
 	}
 
 	for _, tt := range tests {
@@ -271,6 +317,7 @@ func TestLoadClientConfig(t *testing.T) {
 	assert.NotNil(t, config)
 	assert.Equal(t, "debug", config.LogLevel)
 	assert.Equal(t, "localhost", config.Server) // default value
+	assert.Equal(t, "9091", config.MetricsPort)
 }
 
 func TestLoadServerConfig(t *testing.T) {
