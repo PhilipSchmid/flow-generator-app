@@ -1,13 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/PhilipSchmid/flow-generator-app/internal/config"
 	"github.com/PhilipSchmid/flow-generator-app/internal/handlers"
@@ -86,11 +87,10 @@ func main() {
 	}
 
 	// Start metrics server
-	go func() {
-		if err := metrics.StartMetricsServer(cfg.MetricsPort); err != nil && err != http.ErrServerClosed {
-			logging.Logger.Warnf("Metrics server error: %v", err)
-		}
-	}()
+	metricsServer, err := metrics.StartMetricsServer(cfg.MetricsPort)
+	if err != nil {
+		logging.Logger.Fatalf("Failed to start metrics server: %v", err)
+	}
 
 	// Start health check server
 	healthChecker := health.NewChecker()
@@ -147,6 +147,11 @@ func main() {
 	// Stop health check server
 	if err := healthChecker.Stop(); err != nil {
 		logging.Logger.Errorf("Error stopping health check server: %v", err)
+	}
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if err := metricsServer.Stop(shutdownCtx); err != nil {
+		logging.Logger.Errorf("Error stopping metrics server: %v", err)
 	}
 
 	// Flush metrics

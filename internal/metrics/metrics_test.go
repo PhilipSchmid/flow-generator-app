@@ -1,33 +1,43 @@
 package metrics
 
 import (
+	"context"
+	"net"
 	"net/http"
+	"strconv"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestStartMetricsServer(t *testing.T) {
-	// Start metrics server should not error
-	err := StartMetricsServer("0")
-	assert.NoError(t, err)
+func TestMetricsEndpoint(t *testing.T) {
+	server, err := StartMetricsServer("0")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		require.NoError(t, server.Stop(ctx))
+	})
+
+	port := server.Addr().(*net.TCPAddr).Port
+	resp, err := http.Get("http://127.0.0.1:" + netPort(port) + "/metrics")
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
-func TestMetricsEndpoint(t *testing.T) {
-	// Start metrics server on a test port
-	port := "9191"
-	err := StartMetricsServer(port)
-	assert.NoError(t, err)
+func TestMetricsServerReportsBindFailure(t *testing.T) {
+	listener, err := net.Listen("tcp", ":0")
+	require.NoError(t, err)
+	defer func() { _ = listener.Close() }()
 
-	// Give server time to start
-	time.Sleep(100 * time.Millisecond)
+	port := listener.Addr().(*net.TCPAddr).Port
+	server, err := StartMetricsServer(netPort(port))
+	require.Error(t, err)
+	require.Nil(t, server)
+}
 
-	// Test /metrics endpoint
-	resp, err := http.Get("http://localhost:" + port + "/metrics")
-	if err != nil {
-		t.Skip("Could not connect to test server, skipping")
-	}
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	_ = resp.Body.Close()
+func netPort(port int) string {
+	return strconv.Itoa(port)
 }
