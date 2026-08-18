@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/PhilipSchmid/flow-generator-app/internal/metrics"
+	statusapi "github.com/PhilipSchmid/flow-generator-app/internal/status"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -18,12 +20,14 @@ func TestRenderClientDashboardWithoutColor(t *testing.T) {
 	model.history.add(second)
 
 	rendered := model.render()
-	assert.Contains(t, rendered, "Flow Generator")
-	assert.Contains(t, rendered, "TARGET")
-	assert.Contains(t, rendered, "Flow avg · 1m")
-	assert.Contains(t, rendered, "Selected-window distribution")
+	assert.Contains(t, rendered, "FLOW GENERATOR")
+	assert.Contains(t, rendered, "LOAD ATTAINMENT")
+	assert.Contains(t, rendered, "ROLLING FLOW AVG · 1m")
+	assert.Contains(t, rendered, "WINDOW STATISTICS")
 	assert.NotContains(t, rendered, "vtest")
-	assert.Contains(t, rendered, "TCP :8080")
+	assert.Contains(t, rendered, "TCP")
+	assert.Contains(t, rendered, "8080")
+	assert.Len(t, strings.Split(rendered, "\n"), 40)
 	for _, line := range strings.Split(rendered, "\n") {
 		assert.LessOrEqual(t, lipgloss.Width(line), 120, "line exceeds terminal width: %q", line)
 	}
@@ -38,7 +42,7 @@ func TestRenderMissingLatencyAsUnavailable(t *testing.T) {
 	model.history.add(second)
 
 	rendered := model.render()
-	assert.Contains(t, rendered, "Echo RTT")
+	assert.Contains(t, rendered, "ECHO RTT")
 	assert.Contains(t, rendered, "—")
 }
 
@@ -56,6 +60,23 @@ func TestCompactConfigurationLine(t *testing.T) {
 	}
 }
 
+func TestRenderServerRuntimeDetails(t *testing.T) {
+	started := time.Now().UTC().Add(-5 * time.Minute)
+	first := serverDashboardSnapshot(started, started.Add(time.Second), 100)
+	second := serverDashboardSnapshot(started, started.Add(2*time.Second), 140)
+	model := Model{snapshot: &second, connected: true, width: 160, height: 48, color: false, dark: true}
+	model.history.add(first)
+	model.history.add(second)
+
+	rendered := model.render()
+	assert.Contains(t, rendered, "ECHO SERVER")
+	assert.Contains(t, rendered, "version v1.2.3")
+	assert.Contains(t, rendered, "ACCEPTING TRAFFIC")
+	assert.Contains(t, rendered, "active client IPs")
+	assert.Contains(t, rendered, "TCP connections")
+	assert.Contains(t, rendered, "PORT ACTIVITY")
+}
+
 func TestRenderSmallTerminal(t *testing.T) {
 	model := Model{width: 40, height: 10, color: false}
 	assert.Contains(t, model.render(), "Terminal too small")
@@ -69,6 +90,35 @@ func TestSparklineDownsamplesToWidth(t *testing.T) {
 	line := sparkline(values, 20, 0)
 	assert.Equal(t, 20, len([]rune(line)))
 	assert.False(t, strings.Contains(line, " "))
+}
+
+func TestSparklineStretchesShortHistoryToWidth(t *testing.T) {
+	line := sparkline([]float64{1, 2, 3}, 30, 0)
+	assert.Equal(t, 30, len([]rune(line)))
+	assert.NotEqual(t, []rune(line)[0], []rune(line)[29])
+}
+
+func TestLineChartUsesRequestedDimensions(t *testing.T) {
+	chart := lineChart([]float64{1, 10, 2, 8}, 24, 4, 0)
+	lines := strings.Split(chart, "\n")
+	assert.Len(t, lines, 4)
+	for _, line := range lines {
+		assert.Equal(t, 24, len([]rune(line)))
+	}
+}
+
+func serverDashboardSnapshot(started, sampled time.Time, requests uint64) statusapi.Snapshot {
+	return statusapi.Snapshot{
+		SchemaVersion: statusapi.SchemaVersion, Role: "server", Version: "v1.2.3",
+		StartedAt: started, SampledAt: sampled, State: "ready",
+		Configuration: statusapi.Configuration{TCPPorts: []int{8080}, UDPPorts: []int{9000}, HealthPort: "8082", MetricsPort: "9090"},
+		Traffic: metrics.Snapshot{
+			TotalRequestsReceived: requests, TotalTCPReceived: requests / 2, TotalUDPReceived: requests / 2,
+			ActiveTCPConnections: 7,
+			Ports:                []metrics.PortSnapshot{{Protocol: "tcp", Port: "8080", RequestsReceived: requests, BytesReceived: requests * 5, BytesSent: requests * 5}},
+		},
+		Server: &statusapi.ServerSnapshot{Ready: true, Healthy: true, ActiveTCPClients: 3},
+	}
 }
 
 func BenchmarkRenderFullDashboard(b *testing.B) {

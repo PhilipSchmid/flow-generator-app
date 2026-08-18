@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -46,28 +47,35 @@ func (m Model) render() string {
 	if age < 0 {
 		age = 0
 	}
-	meta := fmt.Sprintf("%s · uptime %s", snapshot.Version, compactDuration(uptime))
-	if width >= 100 {
-		meta += fmt.Sprintf(" · updated %s ago", compactDuration(age))
-	}
-	header := styled(colors.primary).Bold(true).Render(title) + "  " +
-		styled(stateColor).Bold(true).Render("● "+state) + "  " +
-		styled(colors.muted).Render(meta)
-	if !m.connected {
-		header += "  " + styled(colors.danger).Render("last sample")
-	}
-
 	var body []string
-	body = append(body, header)
-	body = append(body, m.configurationLine(snapshot, colors, width))
-	body = append(body, m.cards(snapshot, flow, active, colors, width))
-	body = append(body, m.windowAverages(snapshot.Role, colors))
-	body = append(body, m.windowSelector(colors))
+	body = append(body, m.heading(snapshot, title, state, stateColor, uptime, age, colors, width))
+	if snapshot.Role == "client" {
+		body = append(body, m.clientLoadPanel(snapshot, flow, active, colors, width))
+	} else {
+		body = append(body, m.serverSummaryPanel(snapshot, flow, colors, width))
+	}
+	body = append(body, m.windowBar(snapshot.Role, colors, width))
+	if m.showHelp {
+		body = append(body, m.helpPanel(colors, width))
+	}
 
 	if width >= 90 && m.height >= 24 {
 		chartWidth := width - 4
 		if width >= 120 {
 			chartWidth = (width - 1) / 2
+		}
+		chartHeight := 1
+		if m.height >= 32 {
+			chartHeight = 3
+		}
+		if m.height >= 40 {
+			chartHeight = 5
+		}
+		if m.height >= 50 {
+			chartHeight = 7
+		}
+		if m.height >= 60 {
+			chartHeight = 9
 		}
 		rateTitle := "Requests/s"
 		reference := 0.0
@@ -75,14 +83,14 @@ func (m Model) render() string {
 			rateTitle = "Flow starts/s"
 			reference = snapshot.Configuration.Rate
 		}
-		flowChart := chartPanel(rateTitle, rateValues, chartWidth, reference, formatRate(flow.Current), colors.primary, colors)
-		payloadChart := chartPanel("Payload throughput", values(window, func(s sample) float64 { return (s.BytesTX + s.BytesRX) * 8 }), chartWidth, 0, "TX "+formatBits(tx.Current)+" · RX "+formatBits(rx.Current), colors.tx, colors)
+		flowChart := chartPanel(rateTitle, rateValues, chartWidth, chartHeight, reference, formatRate(flow.Current), colors.primary, colors)
+		payloadChart := chartPanel("Payload throughput", values(window, func(s sample) float64 { return (s.BytesTX + s.BytesRX) * 8 }), chartWidth, chartHeight, 0, "TX "+formatBits(tx.Current)+" · RX "+formatBits(rx.Current), colors.tx, colors)
 		if width >= 120 {
 			activeTitle := "Active TCP"
 			if snapshot.Role == "client" {
 				activeTitle = "Active flows"
 			}
-			activeChart := chartPanel(activeTitle, values(window, func(s sample) float64 { return s.Active }), chartWidth, 0, formatFloatCount(active.Current), colors.tcp, colors)
+			activeChart := chartPanel(activeTitle, values(window, func(s sample) float64 { return s.Active }), chartWidth, chartHeight, 0, formatFloatCount(active.Current), colors.tcp, colors)
 			body = append(body, lipgloss.JoinHorizontal(lipgloss.Top, flowChart, " ", activeChart))
 			if snapshot.Role == "client" {
 				rttValues := latencySeries(window, 0.95)
@@ -90,28 +98,40 @@ func (m Model) render() string {
 				if latencyCount > 0 {
 					rttCurrent = formatLatency(latency.P95)
 				}
-				rttChart := chartPanel("Echo RTT p95", rttValues, chartWidth, 0, rttCurrent, colors.udp, colors)
+				rttChart := chartPanel("Echo RTT p95", rttValues, chartWidth, chartHeight, 0, rttCurrent, colors.udp, colors)
 				body = append(body, lipgloss.JoinHorizontal(lipgloss.Top, payloadChart, " ", rttChart))
 			} else {
-				body = append(body, payloadChart)
+				body = append(body, chartPanel("Payload throughput", values(window, func(s sample) float64 { return (s.BytesTX + s.BytesRX) * 8 }), width, chartHeight, 0, "TX "+formatBits(tx.Current)+" · RX "+formatBits(rx.Current), colors.tx, colors))
 			}
 		} else {
 			body = append(body, flowChart, payloadChart)
 		}
 	}
 
-	if m.height >= 28 || width < 90 {
-		body = append(body, m.distributionTable(snapshot, flow, tx, active, latency, latencyCount, colors, width))
-	}
 	if errors := m.errorLine(snapshot, colors); errors != "" {
 		body = append(body, errors)
 	}
-	body = append(body, m.portTable(snapshot, colors, width))
-	if m.showHelp {
-		body = append(body, styled(colors.muted).Render("p50 is the median. Rate percentiles summarize one-second samples; RTT percentiles summarize sampled echoes."))
+	distribution := m.distributionTable(snapshot, flow, tx, rx, active, latency, latencyCount, colors, width)
+	ports := m.portTable(snapshot, colors, width)
+	if m.height >= 28 || width < 90 {
+		switch {
+		case width >= 160:
+			panelWidth := (width - 1) / 2
+			panelHeight := maxInt(lineCount(distribution), lineCount(ports))
+			body = append(body, lipgloss.JoinHorizontal(lipgloss.Top,
+				sectionPanel(distribution, panelWidth, panelHeight, colors), " ",
+				sectionPanel(ports, panelWidth, panelHeight, colors),
+			))
+		case width >= 90:
+			body = append(body,
+				sectionPanel(distribution, width, lineCount(distribution), colors),
+				sectionPanel(ports, width, lineCount(ports), colors),
+			)
+		default:
+			body = append(body, distribution, ports)
+		}
 	}
-	body = append(body, styled(colors.muted).Render("←/→ or 1/5/0 window · q quit · ? help"))
-	return clipLines(strings.Join(body, "\n"), m.height)
+	return withFooter(body, m.footer(colors, width), m.height)
 }
 
 func (m Model) healthState(colors palette) (string, interface {
@@ -150,6 +170,125 @@ func (m Model) healthState(colors palette) (string, interface {
 	return strings.ToUpper(m.snapshot.State), colors.primary
 }
 
+func (m Model) heading(snapshot statusapi.Snapshot, title, state string, stateColor interface {
+	RGBA() (uint32, uint32, uint32, uint32)
+}, uptime, age time.Duration, colors palette, width int) string {
+	inner := maxInt(width-4, 10)
+	role := strings.ToUpper(snapshot.Role)
+	identity := styled(colors.primary).Bold(true).Render(strings.ToUpper(title)) +
+		styled(colors.muted).Render("  /  ") + styled(colors.text).Bold(true).Render(role)
+	status := styled(stateColor).Bold(true).Render("● " + state)
+	if m.paused {
+		status = styled(colors.warning).Bold(true).Render("Ⅱ PAUSED") + styled(colors.muted).Render("  ·  ") + status
+	}
+	if !m.connected {
+		status += styled(colors.danger).Bold(true).Render("  LAST SAMPLE")
+	}
+
+	meta := styled(colors.muted).Render("version ") + styled(colors.text).Render(snapshot.Version) + styled(colors.muted).Render(
+		fmt.Sprintf("  ·  uptime %s  ·  sample %s ago", compactDuration(uptime), compactDuration(age)),
+	)
+	configuration := m.configurationLine(snapshot, colors, inner)
+	lines := []string{joinSides(identity, status, inner)}
+	if width >= 100 {
+		lines = append(lines, joinSides(configuration, meta, inner))
+	} else {
+		lines = append(lines, meta, configuration)
+	}
+	return lipgloss.NewStyle().Width(maxInt(width, 14)).Padding(0, 1).
+		Border(lipgloss.RoundedBorder()).BorderForeground(colors.border).
+		Render(strings.Join(lines, "\n"))
+}
+
+func (m Model) clientLoadPanel(snapshot statusapi.Snapshot, flow, active distribution, colors palette, width int) string {
+	inner := maxInt(width-4, 10)
+	target := snapshot.Configuration.Rate
+	attainment := 0.0
+	if target > 0 {
+		attainment = flow.Current / target
+	}
+	accent := colors.primary
+	if attainment >= 0.95 && attainment <= 1.05 {
+		accent = colors.healthy
+	}
+	recent := m.history.window(5 * time.Second)
+	if summarize(values(recent, func(sample sample) float64 { return sample.SkippedRate })).Average > 0 {
+		accent = colors.warning
+	}
+	if summarize(values(recent, func(sample sample) float64 { return sample.FailureRate })).Average > 0 {
+		accent = colors.danger
+	}
+	heading := joinSides(
+		styled(colors.muted).Bold(true).Render("LOAD ATTAINMENT"),
+		styled(accent).Bold(true).Render(fmt.Sprintf("%.1f%%", attainment*100)),
+		inner,
+	)
+	bar := meterBar(attainment, inner, accent, colors.border)
+
+	activeCount := uint64(maxFloat(active.Current, 0))
+	maxConcurrent := uint64(maxInt(snapshot.Configuration.MaxConcurrent, 0))
+	headroom := uint64(0)
+	if maxConcurrent > activeCount {
+		headroom = maxConcurrent - activeCount
+	}
+	rateLine := strings.Join([]string{
+		styled(accent).Bold(true).Render(formatRate(flow.Current)) + styled(colors.muted).Render(" achieved"),
+		styled(colors.text).Render(formatRate(target)) + styled(colors.muted).Render(" target"),
+		styled(colors.tcp).Bold(true).Render(fmt.Sprintf("%s / %s", formatCount(activeCount), formatCount(maxConcurrent))) + styled(colors.muted).Render(" active"),
+		styled(colors.text).Render(formatCount(headroom)) + styled(colors.muted).Render(" headroom"),
+	}, styled(colors.border).Render("  ·  "))
+	lifetimeLine := strings.Join([]string{
+		styled(colors.muted).Render("LIFETIME"),
+		styled(colors.text).Render(formatCount(snapshot.Client.FlowsStarted)) + styled(colors.muted).Render(" started"),
+		styled(colors.healthy).Render(formatCount(snapshot.Client.FlowsCompleted)) + styled(colors.muted).Render(" completed"),
+		styled(colors.danger).Render(formatCount(snapshot.Client.FlowsFailed)) + styled(colors.muted).Render(" failed"),
+		styled(colors.warning).Render(formatCount(snapshot.Client.StartsSkippedAtCapacity)) + styled(colors.muted).Render(" capacity skips"),
+	}, styled(colors.border).Render("  ·  "))
+	content := strings.Join([]string{heading, bar, rateLine, lifetimeLine}, "\n")
+	return lipgloss.NewStyle().Width(maxInt(width, 14)).Padding(0, 1).
+		Border(lipgloss.RoundedBorder()).BorderForeground(colors.border).
+		Render(lipgloss.NewStyle().MaxWidth(inner).Render(content))
+}
+
+func (m Model) serverSummaryPanel(snapshot statusapi.Snapshot, flow distribution, colors palette, width int) string {
+	inner := maxInt(width-4, 10)
+	traffic := snapshot.Traffic
+	errors := totalErrors(snapshot.Server.Errors)
+	line := strings.Join([]string{
+		styled(colors.primary).Bold(true).Render(formatRate(flow.Current)) + styled(colors.muted).Render(" requests"),
+		styled(colors.tcp).Bold(true).Render(formatCount(uint64(maxInt64(traffic.ActiveTCPConnections, 0)))) + styled(colors.muted).Render(" TCP connections"),
+		styled(colors.tcp).Bold(true).Render(formatCount(snapshot.Server.ActiveTCPClients)) + styled(colors.muted).Render(" active client IPs"),
+		styled(colors.danger).Render(formatCount(errors)) + styled(colors.muted).Render(" errors"),
+	}, styled(colors.border).Render("  ·  "))
+	lifetime := strings.Join([]string{
+		styled(colors.muted).Render("LIFETIME"),
+		styled(colors.text).Render(formatCount(traffic.TotalRequestsReceived)) + styled(colors.muted).Render(" requests"),
+		styled(colors.tcp).Render(formatCount(traffic.TotalTCPReceived)) + styled(colors.muted).Render(" TCP"),
+		styled(colors.udp).Render(formatCount(traffic.TotalUDPReceived)) + styled(colors.muted).Render(" UDP"),
+		styled(colors.text).Render(onOff(snapshot.Configuration.TracingEnabled)) + styled(colors.muted).Render(" tracing"),
+	}, styled(colors.border).Render("  ·  "))
+	serviceState := styled(colors.warning).Bold(true).Render("NOT READY")
+	if snapshot.Server.Ready && snapshot.Server.Healthy {
+		serviceState = styled(colors.healthy).Bold(true).Render("ACCEPTING TRAFFIC")
+	} else if snapshot.Server.Ready {
+		serviceState = styled(colors.danger).Bold(true).Render("UNHEALTHY")
+	}
+	heading := joinSides(styled(colors.muted).Bold(true).Render("LIVE SERVER"), serviceState, inner)
+	content := strings.Join([]string{heading, line, lifetime}, "\n")
+	return lipgloss.NewStyle().Width(maxInt(width, 14)).Padding(0, 1).
+		Border(lipgloss.RoundedBorder()).BorderForeground(colors.border).
+		Render(lipgloss.NewStyle().MaxWidth(inner).Render(content))
+}
+
+func (m Model) windowBar(role string, colors palette, width int) string {
+	selector := m.windowSelector(colors)
+	averages := m.windowAverages(role, colors)
+	if width < 100 {
+		return selector + "\n" + averages
+	}
+	return joinSides(selector, averages, width)
+}
+
 func (m Model) configurationLine(snapshot statusapi.Snapshot, colors palette, width int) string {
 	cfg := snapshot.Configuration
 	if snapshot.Role == "client" {
@@ -172,9 +311,9 @@ func (m Model) configurationLine(snapshot statusapi.Snapshot, colors palette, wi
 }
 
 func (m Model) windowAverages(role string, colors palette) string {
-	label := "Flow avg"
+	label := "ROLLING FLOW AVG"
 	if role == "server" {
-		label = "Request avg"
+		label = "ROLLING REQUEST AVG"
 	}
 	parts := []string{label}
 	for _, duration := range windows {
@@ -184,51 +323,8 @@ func (m Model) windowAverages(role string, colors palette) string {
 	return styled(colors.muted).Render(strings.Join(parts, " · "))
 }
 
-func (m Model) cards(snapshot statusapi.Snapshot, flow, active distribution, colors palette, width int) string {
-	cardCount := 4
-	if width < 80 {
-		cardCount = 3
-	}
-	cardWidth := maxInt(10, width/cardCount-4)
-	card := func(label, value, detail string, accent interface {
-		RGBA() (uint32, uint32, uint32, uint32)
-	}) string {
-		content := styled(colors.muted).Render(label) + "\n" + styled(accent).Bold(true).Render(value)
-		if detail != "" {
-			content += "\n" + styled(colors.muted).Render(detail)
-		}
-		return lipgloss.NewStyle().Width(cardWidth).Padding(0, 1).Border(lipgloss.RoundedBorder()).BorderForeground(colors.border).Render(content)
-	}
-	if snapshot.Client != nil {
-		target := snapshot.Configuration.Rate
-		attainment := 0.0
-		if target > 0 {
-			attainment = flow.Current / target * 100
-		}
-		cards := []string{
-			card("TARGET", formatRate(target), "flow starts", colors.primary),
-			card("ACHIEVED", formatRate(flow.Current), fmt.Sprintf("%.2f%%", attainment), colors.healthy),
-			card("ACTIVE", formatCount(uint64(maxFloat(active.Current, 0))), fmt.Sprintf("of %s", formatCount(uint64(snapshot.Configuration.MaxConcurrent))), colors.tcp),
-		}
-		if width >= 80 {
-			cards = append(cards, card("FAIL / SKIP", fmt.Sprintf("%s / %s", formatCount(snapshot.Client.FlowsFailed), formatCount(snapshot.Client.StartsSkippedAtCapacity)), "lifetime", colors.warning))
-		}
-		return lipgloss.JoinHorizontal(lipgloss.Top, cards...)
-	}
-	traffic := snapshot.Traffic
-	cards := []string{
-		card("TCP ACTIVE", formatCount(uint64(maxInt64(traffic.ActiveTCPConnections, 0))), "connections", colors.tcp),
-		card("TCP TOTAL", formatCount(traffic.TotalTCPReceived), "connections", colors.tcp),
-		card("UDP TOTAL", formatCount(traffic.TotalUDPReceived), "packets", colors.udp),
-	}
-	if width >= 80 {
-		cards = append(cards, card("ERRORS", formatCount(totalErrors(snapshot.Server.Errors)), "lifetime", colors.danger))
-	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, cards...)
-}
-
 func (m Model) windowSelector(colors palette) string {
-	parts := []string{styled(colors.muted).Render("Window")}
+	parts := []string{styled(colors.muted).Bold(true).Render("TIME WINDOW")}
 	for i, duration := range windows {
 		style := lipgloss.NewStyle().Padding(0, 1).Foreground(colors.muted)
 		if i == m.windowIndex {
@@ -239,29 +335,40 @@ func (m Model) windowSelector(colors palette) string {
 	return strings.Join(parts, " ")
 }
 
-func chartPanel(title string, values []float64, width int, reference float64, current string, accent interface {
+func chartPanel(title string, values []float64, width, height int, reference float64, current string, accent interface {
 	RGBA() (uint32, uint32, uint32, uint32)
 }, colors palette) string {
 	inner := maxInt(width-4, 10)
-	content := styled(colors.muted).Render(title) + "  " + styled(accent).Bold(true).Render(current) + "\n" + styled(accent).Render(sparkline(values, inner, reference))
-	return lipgloss.NewStyle().Width(inner).Padding(0, 1).Border(lipgloss.RoundedBorder()).BorderForeground(colors.border).Render(content)
+	heading := joinSides(styled(colors.muted).Bold(true).Render(strings.ToUpper(title)), styled(accent).Bold(true).Render(current), inner)
+	chart := sparkline(values, inner, reference)
+	if height > 1 {
+		label := strings.ToUpper(title) + "  ·  AUTO RANGE"
+		if reference > 0 {
+			label += "  ·  ┄ TARGET"
+		}
+		heading = joinSides(styled(colors.muted).Bold(true).Render(label), styled(accent).Bold(true).Render(current), inner)
+		chart = lineChart(values, inner, height, reference)
+	}
+	content := heading + "\n" + styled(accent).Render(chart)
+	return lipgloss.NewStyle().Width(maxInt(width, 14)).Padding(0, 1).Border(lipgloss.RoundedBorder()).BorderForeground(colors.border).Render(content)
 }
 
-func (m Model) distributionTable(snapshot statusapi.Snapshot, flow, tx, active, latency distribution, latencyCount uint64, colors palette, width int) string {
+func (m Model) distributionTable(snapshot statusapi.Snapshot, flow, tx, rx, active, latency distribution, latencyCount uint64, colors palette, width int) string {
 	var builder strings.Builder
-	builder.WriteString(styled(colors.muted).Render("Selected-window distribution · " + windowLabel(m.selectedWindow())))
+	builder.WriteString(styled(colors.muted).Bold(true).Render("WINDOW STATISTICS  ·  " + strings.ToUpper(windowLabel(m.selectedWindow()))))
 	builder.WriteString("\n")
-	builder.WriteString(styled(colors.muted).Render(fmt.Sprintf("%-12s %9s %9s %9s %9s %9s %9s", "METRIC", "AVG", "P50", "P90", "P95", "P99", "MAX")))
+	builder.WriteString(styled(colors.muted).Render(fmt.Sprintf("%-10s %8s %8s %8s %8s %8s %8s", "METRIC", "AVG", "P50", "P90", "P95", "P99", "MAX")))
 	builder.WriteString("\n")
 	row := func(label string, value distribution, format func(float64) string) {
-		_, _ = fmt.Fprintf(&builder, "%-12s %9s %9s %9s %9s %9s %9s\n", label, format(value.Average), format(value.P50), format(value.P90), format(value.P95), format(value.P99), format(value.Maximum))
+		_, _ = fmt.Fprintf(&builder, "%-10s %8s %8s %8s %8s %8s %8s\n", label, format(value.Average), format(value.P50), format(value.P90), format(value.P95), format(value.P99), format(value.Maximum))
 	}
 	if snapshot.Role == "client" {
 		row("Flow/s", flow, formatFloatRate)
 	} else {
 		row("Requests/s", flow, formatFloatRate)
 	}
-	row("Payload TX", tx, formatBits)
+	row("Payload TX", tx, formatTableBits)
+	row("Payload RX", rx, formatTableBits)
 	row("Active", active, formatFloatCount)
 	if snapshot.Role == "client" {
 		formatRTT := func(value float64) string { return formatLatency(value) }
@@ -273,7 +380,7 @@ func (m Model) distributionTable(snapshot statusapi.Snapshot, flow, tx, active, 
 
 func (m Model) portTable(snapshot statusapi.Snapshot, colors palette, width int) string {
 	if len(m.history.samples) == 0 {
-		return styled(colors.muted).Render("Ports · waiting for rate samples")
+		return styled(colors.muted).Bold(true).Render("PORT ACTIVITY  ·  CURRENT") + "\n" + styled(colors.muted).Render("Waiting for rate samples")
 	}
 	ports := append([]portSample(nil), m.history.samples[len(m.history.samples)-1].Ports...)
 	sort.Slice(ports, func(i, j int) bool {
@@ -289,7 +396,13 @@ func (m Model) portTable(snapshot statusapi.Snapshot, colors palette, width int)
 		limit = len(ports)
 	}
 	var builder strings.Builder
-	builder.WriteString(styled(colors.muted).Render("Ports · ranked by current activity"))
+	builder.WriteString(styled(colors.muted).Bold(true).Render("PORT ACTIVITY  ·  CURRENT"))
+	builder.WriteString("\n")
+	if snapshot.Role == "client" {
+		builder.WriteString(styled(colors.muted).Render(fmt.Sprintf("%-5s %6s %10s %11s %12s %12s %9s", "PROTO", "PORT", "FLOW/S", "PACKETS/S", "TX", "RX", "FAIL/S")))
+	} else {
+		builder.WriteString(styled(colors.muted).Render(fmt.Sprintf("%-5s %6s %12s %12s %12s", "PROTO", "PORT", "REQUESTS/S", "TX", "RX")))
+	}
 	for _, port := range ports[:limit] {
 		protocolColor := colors.tcp
 		if port.Protocol == "udp" {
@@ -303,12 +416,15 @@ func (m Model) portTable(snapshot statusapi.Snapshot, colors palette, width int)
 		if snapshot.Role == "server" && port.Protocol == "udp" {
 			activityLabel = "packets/s"
 		}
-		line := fmt.Sprintf("\n%s :%-5s %10s %-9s  TX %10s  RX %10s", strings.ToUpper(port.Protocol), port.Port, formatFloatRate(activity), activityLabel, formatBits(port.BytesTX*8), formatBits(port.BytesRX*8))
-		if snapshot.Role == "client" && port.Protocol == "udp" {
-			line += fmt.Sprintf("  packets %s/s", formatFloatRate(port.PacketRate))
-		}
-		if port.Failures > 0 {
-			line += fmt.Sprintf("  fail %s/s", formatFloatRate(port.Failures))
+		var line string
+		if snapshot.Role == "client" {
+			packetRate := "—"
+			if port.Protocol == "udp" {
+				packetRate = formatFloatRate(port.PacketRate)
+			}
+			line = fmt.Sprintf("\n%-5s %6s %10s %11s %12s %12s %9s", strings.ToUpper(port.Protocol), port.Port, formatFloatRate(activity), packetRate, formatBits(port.BytesTX*8), formatBits(port.BytesRX*8), formatFloatRate(port.Failures))
+		} else {
+			line = fmt.Sprintf("\n%-5s %6s %12s %12s %12s", strings.ToUpper(port.Protocol), port.Port, formatFloatRate(activity)+" "+activityLabel, formatBits(port.BytesTX*8), formatBits(port.BytesRX*8))
 		}
 		builder.WriteString(styled(protocolColor).Render(line))
 	}
@@ -330,6 +446,109 @@ func (m Model) errorLine(snapshot statusapi.Snapshot, colors palette) string {
 		formatCount(errors.Dial), formatCount(errors.Accept), formatCount(errors.Read),
 		formatCount(errors.Write), formatCount(errors.Mismatch), formatCount(errors.MTU),
 	))
+}
+
+func (m Model) helpPanel(colors palette, width int) string {
+	content := strings.Join([]string{
+		styled(colors.text).Bold(true).Render("SHORTCUTS") + styled(colors.muted).Render("  ·  keyboard-first; the monitored process keeps running when the dashboard exits"),
+		styled(colors.primary).Render("← / h") + styled(colors.muted).Render(" previous window  ·  ") + styled(colors.primary).Render("→ / l / Tab") + styled(colors.muted).Render(" next  ·  ") + styled(colors.primary).Render("1 / 5 / 0") + styled(colors.muted).Render(" select 1m / 5m / 15m"),
+		styled(colors.primary).Render("Space") + styled(colors.muted).Render(" pause or resume  ·  ") + styled(colors.primary).Render("r") + styled(colors.muted).Render(" refresh now  ·  ") + styled(colors.primary).Render("? / F1") + styled(colors.muted).Render(" toggle help  ·  ") + styled(colors.primary).Render("q / F10") + styled(colors.muted).Render(" quit"),
+		styled(colors.muted).Render("Charts auto-scale to expose variation; the dashed rate line marks target. p50 is the median; RTT uses sampled echoes."),
+	}, "\n")
+	return sectionPanel(content, width, lineCount(content), colors)
+}
+
+func (m Model) footer(colors palette, width int) string {
+	left := keycap("←→ / Tab", colors) + styled(colors.muted).Render(" window  ") +
+		keycap("Space", colors) + styled(colors.muted).Render(" pause  ") +
+		keycap("r", colors) + styled(colors.muted).Render(" refresh  ") +
+		keycap("? / F1", colors) + styled(colors.muted).Render(" help  ") +
+		keycap("q / F10", colors) + styled(colors.muted).Render(" quit")
+	if width < 100 {
+		left = keycap("←→", colors) + styled(colors.muted).Render(" window  ") +
+			keycap("Space", colors) + styled(colors.muted).Render(" pause  ") +
+			keycap("?", colors) + styled(colors.muted).Render(" help  ") +
+			keycap("q", colors) + styled(colors.muted).Render(" quit")
+	}
+	mode := styled(colors.healthy).Bold(true).Render("● LIVE")
+	if m.paused {
+		mode = styled(colors.warning).Bold(true).Render("Ⅱ PAUSED")
+	}
+	right := mode + styled(colors.muted).Render("  ·  "+windowLabel(m.selectedWindow()))
+	return lipgloss.NewStyle().MaxWidth(width).Render(joinSides(left, right, width))
+}
+
+func keycap(label string, colors palette) string {
+	return styled(colors.primary).Bold(true).Render("[" + label + "]")
+}
+
+func sectionPanel(content string, width, height int, colors palette) string {
+	inner := maxInt(width-4, 10)
+	content = lipgloss.NewStyle().MaxWidth(inner).Render(content)
+	return lipgloss.NewStyle().Width(maxInt(width, 14)).Height(height).Padding(0, 1).
+		Border(lipgloss.RoundedBorder()).BorderForeground(colors.border).
+		Render(content)
+}
+
+func meterBar(value float64, width int, accent, empty interface {
+	RGBA() (uint32, uint32, uint32, uint32)
+}) string {
+	if width <= 0 {
+		return ""
+	}
+	filled := int(math.Round(value * float64(width)))
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > width {
+		filled = width
+	}
+	return styled(accent).Render(strings.Repeat("━", filled)) + styled(empty).Render(strings.Repeat("─", width-filled))
+}
+
+func joinSides(left, right string, width int) string {
+	if width <= 0 {
+		return left + right
+	}
+	rightWidth := lipgloss.Width(right)
+	if rightWidth >= width {
+		return lipgloss.NewStyle().MaxWidth(width).Render(right)
+	}
+	left = lipgloss.NewStyle().MaxWidth(width - rightWidth - 1).Render(left)
+	gap := width - lipgloss.Width(left) - rightWidth
+	if gap < 1 {
+		gap = 1
+	}
+	return left + strings.Repeat(" ", gap) + right
+}
+
+func withFooter(body []string, footer string, height int) string {
+	if height <= 0 {
+		return strings.Join(append(body, footer), "\n")
+	}
+	content := strings.Split(clipLines(strings.Join(body, "\n"), maxInt(height-1, 0)), "\n")
+	if height == 1 {
+		return footer
+	}
+	for len(content) < height-1 {
+		content = append(content, "")
+	}
+	content = append(content, footer)
+	return strings.Join(content, "\n")
+}
+
+func lineCount(content string) int {
+	if content == "" {
+		return 0
+	}
+	return strings.Count(content, "\n") + 1
+}
+
+func onOff(value bool) string {
+	if value {
+		return "on"
+	}
+	return "off"
 }
 
 func withLatencyThresholds(value distribution, count uint64) distribution {
@@ -354,6 +573,7 @@ func withLatencyThresholds(value distribution, count uint64) distribution {
 func formatRate(value float64) string      { return formatSI(value, "/s") }
 func formatFloatRate(value float64) string { return formatSI(value, "") }
 func formatBits(value float64) string      { return formatSI(value, "bit/s") }
+func formatTableBits(value float64) string { return formatSI(value, "b/s") }
 func formatFloatCount(value float64) string {
 	if value < 0 {
 		return "—"
