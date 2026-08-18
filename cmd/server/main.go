@@ -165,7 +165,7 @@ func main() {
 			Traffic: mc.Snapshot(),
 			Server: &statusapi.ServerSnapshot{
 				Ready: healthChecker.Ready(), Healthy: healthChecker.Healthy(),
-				Errors: statusTracker.Errors(),
+				ActiveTCPClients: statusTracker.ActiveTCPClients(), Errors: statusTracker.Errors(),
 			},
 		}
 	})

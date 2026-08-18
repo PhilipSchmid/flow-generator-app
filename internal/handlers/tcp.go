@@ -40,6 +40,10 @@ func NewTCPHandlerWithStatus(mc *metrics.MetricsCollector, tracker *statusmetric
 // Handle processes a TCP connection
 func (h *TCPHandler) Handle(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
+	if h.statusTracker != nil {
+		clientKey := h.statusTracker.TCPClientConnected(conn.RemoteAddr())
+		defer h.statusTracker.TCPClientDisconnected(clientKey)
+	}
 
 	h.metricsCollector.IncActiveTCPConnections()
 	defer h.metricsCollector.DecActiveTCPConnections()

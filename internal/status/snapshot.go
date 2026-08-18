@@ -3,6 +3,8 @@ package status
 import (
 	"math"
 	"math/bits"
+	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -81,9 +83,10 @@ type ClientSnapshot struct {
 
 // ServerSnapshot contains server-specific health and error state.
 type ServerSnapshot struct {
-	Ready   bool        `json:"ready"`
-	Healthy bool        `json:"healthy"`
-	Errors  ErrorCounts `json:"errors"`
+	Ready            bool        `json:"ready"`
+	Healthy          bool        `json:"healthy"`
+	ActiveTCPClients uint64      `json:"active_tcp_clients"`
+	Errors           ErrorCounts `json:"errors"`
 }
 
 // Snapshot is the versioned response served to the local dashboard.
@@ -274,10 +277,68 @@ func (t *ClientTracker) Snapshot() ClientSnapshot {
 	}
 }
 
-// ServerTracker owns counters for server-side failures.
-type ServerTracker struct{ errors errorCounters }
+// ServerTracker owns counters for server-side failures and connection-level
+// status. Client IP tracking runs only at TCP connection boundaries, never in
+// the per-request data path.
+type ServerTracker struct {
+	errors errorCounters
+
+	clientsMu      sync.Mutex
+	activeTCPPeers map[string]uint64
+}
 
 func (t *ServerTracker) RecordReadError()    { t.errors.read.Add(1) }
 func (t *ServerTracker) RecordWriteError()   { t.errors.write.Add(1) }
 func (t *ServerTracker) RecordAcceptError()  { t.errors.accept.Add(1) }
 func (t *ServerTracker) Errors() ErrorCounts { return t.errors.snapshot() }
+
+// TCPClientConnected records an active TCP peer and returns its normalized IP
+// key for the matching disconnect call.
+func (t *ServerTracker) TCPClientConnected(address net.Addr) string {
+	key := tcpClientIP(address)
+	if key == "" {
+		return ""
+	}
+	t.clientsMu.Lock()
+	if t.activeTCPPeers == nil {
+		t.activeTCPPeers = make(map[string]uint64)
+	}
+	t.activeTCPPeers[key]++
+	t.clientsMu.Unlock()
+	return key
+}
+
+// TCPClientDisconnected removes one active connection for a TCP peer.
+func (t *ServerTracker) TCPClientDisconnected(key string) {
+	if key == "" {
+		return
+	}
+	t.clientsMu.Lock()
+	if count := t.activeTCPPeers[key]; count > 1 {
+		t.activeTCPPeers[key] = count - 1
+	} else {
+		delete(t.activeTCPPeers, key)
+	}
+	t.clientsMu.Unlock()
+}
+
+func (t *ServerTracker) ActiveTCPClients() uint64 {
+	t.clientsMu.Lock()
+	count := uint64(len(t.activeTCPPeers))
+	t.clientsMu.Unlock()
+	return count
+}
+
+func tcpClientIP(address net.Addr) string {
+	if address == nil {
+		return ""
+	}
+	if tcpAddress, ok := address.(*net.TCPAddr); ok {
+		return tcpAddress.IP.String()
+	}
+	host, _, err := net.SplitHostPort(address.String())
+	if err != nil {
+		return ""
+	}
+	return host
+}
