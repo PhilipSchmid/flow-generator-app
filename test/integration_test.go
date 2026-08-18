@@ -3,7 +3,9 @@ package test
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"testing"
@@ -21,6 +23,26 @@ func findAvailablePort(t *testing.T) int {
 	return listener.Addr().(*net.TCPAddr).Port
 }
 
+func findAvailableUDPPort(t *testing.T) int {
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+	return conn.LocalAddr().(*net.UDPAddr).Port
+}
+
+func waitForReady(t *testing.T, port int) {
+	url := fmt.Sprintf("http://127.0.0.1:%d/ready", port)
+	require.Eventually(t, func() bool {
+		client := http.Client{Timeout: 200 * time.Millisecond}
+		resp, err := client.Get(url)
+		if err != nil {
+			return false
+		}
+		defer func() { _ = resp.Body.Close() }()
+		return resp.StatusCode == http.StatusOK
+	}, 5*time.Second, 25*time.Millisecond)
+}
+
 // TestServerClientIntegration tests the server and client together
 func TestServerClientIntegration(t *testing.T) {
 	if testing.Short() {
@@ -29,8 +51,9 @@ func TestServerClientIntegration(t *testing.T) {
 
 	// Find available ports
 	tcpPort := findAvailablePort(t)
-	udpPort := findAvailablePort(t)
+	udpPort := findAvailableUDPPort(t)
 	metricsPort := findAvailablePort(t)
+	healthPort := findAvailablePort(t)
 
 	// Build server and client binaries
 	serverBinary := "./test-server"
@@ -53,6 +76,7 @@ func TestServerClientIntegration(t *testing.T) {
 		"--tcp_ports_server", fmt.Sprintf("%d", tcpPort),
 		"--udp_ports_server", fmt.Sprintf("%d", udpPort),
 		"--metrics_port", fmt.Sprintf("%d", metricsPort),
+		"--health_port", fmt.Sprintf("%d", healthPort),
 		"--log_level", "error",
 		"--log_format", "json",
 	)
@@ -65,8 +89,7 @@ func TestServerClientIntegration(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = serverCmd.Process.Kill() }()
 
-	// Wait for server to start
-	time.Sleep(2 * time.Second)
+	waitForReady(t, healthPort)
 
 	// Test TCP client
 	t.Run("TCP Client", func(t *testing.T) {
@@ -91,6 +114,7 @@ func TestServerClientIntegration(t *testing.T) {
 		clientCmd := exec.Command(clientBinary,
 			"--server", "127.0.0.1",
 			"--udp_ports", fmt.Sprintf("%d", udpPort),
+			"--protocol", "udp",
 			"--rate", "10",
 			"--max_concurrent", "2",
 			"--flow_count", "5",
@@ -106,18 +130,13 @@ func TestServerClientIntegration(t *testing.T) {
 
 	// Test metrics endpoint
 	t.Run("Metrics Endpoint", func(t *testing.T) {
-		conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", metricsPort))
-		if err == nil {
-			defer func() { _ = conn.Close() }()
-			// Send HTTP request
-			_, _ = fmt.Fprintf(conn, "GET /metrics HTTP/1.0\r\n\r\n")
-			// Read response
-			buf := make([]byte, 1024)
-			n, _ := conn.Read(buf)
-			response := string(buf[:n])
-			assert.Contains(t, response, "200 OK")
-			assert.Contains(t, response, "active_tcp_connections")
-		}
+		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/metrics", metricsPort))
+		require.NoError(t, err)
+		defer func() { _ = resp.Body.Close() }()
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Contains(t, string(body), "active_tcp_connections")
 	})
 
 	// Clean up
@@ -132,6 +151,7 @@ func TestServerTCPEcho(t *testing.T) {
 	}
 
 	tcpPort := findAvailablePort(t)
+	healthPort := findAvailablePort(t)
 	serverBinary := "./test-server-tcp"
 
 	// Build server
@@ -143,6 +163,7 @@ func TestServerTCPEcho(t *testing.T) {
 	// Start server
 	serverCmd := exec.Command(serverBinary,
 		"--tcp_ports_server", fmt.Sprintf("%d", tcpPort),
+		"--health_port", fmt.Sprintf("%d", healthPort),
 		"--log_level", "error",
 	)
 
@@ -150,8 +171,7 @@ func TestServerTCPEcho(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = serverCmd.Process.Kill() }()
 
-	// Wait for server to start
-	time.Sleep(1 * time.Second)
+	waitForReady(t, healthPort)
 
 	// Connect and test echo
 	conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", tcpPort))
@@ -163,7 +183,7 @@ func TestServerTCPEcho(t *testing.T) {
 	require.NoError(t, err)
 
 	buf := make([]byte, len(testData))
-	_, err = conn.Read(buf)
+	_, err = io.ReadFull(conn, buf)
 	require.NoError(t, err)
 
 	assert.Equal(t, testData, buf)
@@ -177,7 +197,8 @@ func TestServerUDPEcho(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	udpPort := findAvailablePort(t)
+	udpPort := findAvailableUDPPort(t)
+	healthPort := findAvailablePort(t)
 	serverBinary := "./test-server-udp"
 
 	// Build server
@@ -189,6 +210,7 @@ func TestServerUDPEcho(t *testing.T) {
 	// Start server
 	serverCmd := exec.Command(serverBinary,
 		"--udp_ports_server", fmt.Sprintf("%d", udpPort),
+		"--health_port", fmt.Sprintf("%d", healthPort),
 		"--log_level", "error",
 	)
 
@@ -196,8 +218,7 @@ func TestServerUDPEcho(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = serverCmd.Process.Kill() }()
 
-	// Wait for server to start
-	time.Sleep(1 * time.Second)
+	waitForReady(t, healthPort)
 
 	// Connect and test echo
 	conn, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", udpPort))
@@ -226,7 +247,8 @@ func TestMultipleFlows(t *testing.T) {
 
 	tcpPort1 := findAvailablePort(t)
 	tcpPort2 := findAvailablePort(t)
-	udpPort1 := findAvailablePort(t)
+	udpPort1 := findAvailableUDPPort(t)
+	healthPort := findAvailablePort(t)
 	serverBinary := "./test-server-multi"
 	clientBinary := "./test-client-multi"
 
@@ -245,6 +267,7 @@ func TestMultipleFlows(t *testing.T) {
 	serverCmd := exec.Command(serverBinary,
 		"--tcp_ports_server", fmt.Sprintf("%d,%d", tcpPort1, tcpPort2),
 		"--udp_ports_server", fmt.Sprintf("%d", udpPort1),
+		"--health_port", fmt.Sprintf("%d", healthPort),
 		"--log_level", "error",
 	)
 
@@ -252,7 +275,7 @@ func TestMultipleFlows(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = serverCmd.Process.Kill() }()
 
-	time.Sleep(1 * time.Second)
+	waitForReady(t, healthPort)
 
 	// Run client with multiple flows
 	clientCmd := exec.Command(clientBinary,
@@ -275,7 +298,7 @@ func TestMultipleFlows(t *testing.T) {
 	outputStr := string(output)
 
 	// Check that flows were completed successfully
-	assert.Contains(t, outputStr, "All flows completed")
+	assert.Contains(t, outputStr, "Flow count limit reached; final flows drained")
 	assert.Contains(t, outputStr, "Total Requests Sent")
 
 	// Verify requests were sent - check that we have non-zero values
