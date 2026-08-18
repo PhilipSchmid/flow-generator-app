@@ -26,6 +26,18 @@ type mockConn struct {
 	mu         sync.Mutex
 }
 
+type shortWriteConn struct {
+	*mockConn
+	maxWrite int
+}
+
+func (c *shortWriteConn) Write(p []byte) (int, error) {
+	if len(p) > c.maxWrite {
+		p = p[:c.maxWrite]
+	}
+	return c.mockConn.Write(p)
+}
+
 func newMockConn() *mockConn {
 	return &mockConn{
 		readBuf:    bytes.NewBuffer([]byte{}),
@@ -162,6 +174,20 @@ func TestTCPHandlerMetrics(t *testing.T) {
 
 	<-done
 
+	assert.True(t, conn.isClosed())
+}
+
+func TestTCPHandlerRetriesPartialWrites(t *testing.T) {
+	mc := metrics.NewMetricsCollector()
+	handler := NewTCPHandler(mc)
+	base := newMockConn()
+	payload := []byte("partial writes must not truncate the echo")
+	base.writeToReadBuf(payload)
+	conn := &shortWriteConn{mockConn: base, maxWrite: 3}
+
+	handler.Handle(conn)
+
+	assert.Equal(t, payload, conn.getWrittenData())
 	assert.True(t, conn.isClosed())
 }
 
