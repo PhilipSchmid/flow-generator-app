@@ -47,6 +47,8 @@ var payloadCache []byte
 
 const tcpReadBufferSize = 1024
 
+const progressLogInterval = 30 * time.Second
+
 var tcpReadBufferPool = sync.Pool{
 	New: func() any { return new([tcpReadBufferSize]byte) },
 }
@@ -301,6 +303,8 @@ func runFlowScheduler(ctx context.Context, rate float64, maxConcurrent, flowCoun
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	progressTicker := time.NewTicker(progressLogInterval)
+	defer progressTicker.Stop()
 
 	sem := make(chan struct{}, maxConcurrent)
 	var wg sync.WaitGroup
@@ -332,6 +336,12 @@ func runFlowScheduler(ctx context.Context, rate float64, maxConcurrent, flowCoun
 			default:
 				stats.skipped++
 			}
+		case <-progressTicker.C:
+			logging.Logger.Infow("Flow generation progress",
+				"flows_started", stats.started,
+				"active_flows", len(sem),
+				"starts_skipped_at_capacity", stats.skipped,
+			)
 		}
 	}
 }
