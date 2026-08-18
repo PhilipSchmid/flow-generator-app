@@ -34,7 +34,7 @@ spec:
         - "--max_concurrent=50"
         - "--constant_flows=true"
         ports:
-        - containerPort: 9090
+        - containerPort: 9091
           name: metrics
         resources:
           requests:
