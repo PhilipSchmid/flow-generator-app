@@ -288,6 +288,61 @@ func TestServerConfigValidate(t *testing.T) {
 			wantErr: true,
 			errMsg:  "at least one port",
 		},
+		{
+			name: "metrics and health ports conflict",
+			config: ServerConfig{
+				CommonConfig: CommonConfig{
+					LogLevel:    "info",
+					LogFormat:   "json",
+					MetricsPort: "9090",
+				},
+				TCPPortsServer: "8080",
+				HealthPort:     "9090",
+			},
+			wantErr: true,
+			errMsg:  "metrics_port and health_port must be different",
+		},
+		{
+			name: "metrics and TCP ports conflict",
+			config: ServerConfig{
+				CommonConfig: CommonConfig{
+					LogLevel:    "info",
+					LogFormat:   "json",
+					MetricsPort: "8080",
+				},
+				TCPPortsServer: "8080",
+				HealthPort:     "8082",
+			},
+			wantErr: true,
+			errMsg:  "metrics_port conflicts with tcp_ports_server",
+		},
+		{
+			name: "health and TCP ports conflict",
+			config: ServerConfig{
+				CommonConfig: CommonConfig{
+					LogLevel:    "info",
+					LogFormat:   "json",
+					MetricsPort: "9090",
+				},
+				TCPPortsServer: "8080",
+				HealthPort:     "8080",
+			},
+			wantErr: true,
+			errMsg:  "health_port conflicts with tcp_ports_server",
+		},
+		{
+			name: "UDP may share a numeric management port",
+			config: ServerConfig{
+				CommonConfig: CommonConfig{
+					LogLevel:    "info",
+					LogFormat:   "json",
+					MetricsPort: "9000",
+				},
+				UDPPortsServer: "9000",
+				HealthPort:     "8082",
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
