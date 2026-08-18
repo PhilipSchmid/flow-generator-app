@@ -2,20 +2,24 @@
 
 ![Build and push Docker image](https://github.com/philipschmid/flow-generator-app/actions/workflows/build.yaml/badge.svg) ![CI](https://github.com/philipschmid/flow-generator-app/actions/workflows/ci.yaml/badge.svg)
 
-This project provides a server and client to generate network flows (TCP and UDP) for Kubernetes network testing (e.g., for Cilium and Hubble). The server echoes back received data, while the client generates configurable flows to simulate network traffic.
+Flow Generator runs a TCP/UDP echo server and a traffic client for testing Kubernetes networks, including Cilium and Hubble. The client starts flows at a controlled rate; the server echoes their payloads.
+
+## Why This Exists
+
+[iperf3](https://software.es.net/iperf/) measures the maximum achievable bandwidth of TCP, UDP, or SCTP paths and reports results such as throughput and loss. Flow Generator tests a different workload: many TCP/UDP flows starting, overlapping, and ending across configurable ports. Use iperf3 to measure path capacity. Use Flow Generator to exercise connection churn, network policy, and observability while controlling start rate, duration, concurrency, and payload size.
 
 ## Features
 
-- **Multi-protocol support**: TCP and UDP traffic generation
-- **Flexible configuration**: Command-line flags, `FLOW_GENERATOR_` environment variables, and optional config files
-- **Observable**: Prometheus metrics, server health checks, and optional OpenTelemetry tracing
-- **Bounded concurrency**: Evenly paced flow starts with a configurable concurrency ceiling
-- **Kubernetes-native**: Paired constant- and random-traffic manifests
-- **Developer-friendly**: Live-reload targets, tests, benchmarks, and CI/CD workflows
+- **TCP and UDP**: Generate either protocol or mix both
+- **Configuration**: Use command-line flags, `FLOW_GENERATOR_` environment variables, or optional config files
+- **Observability**: Prometheus metrics, server health checks, and optional OpenTelemetry tracing
+- **Bounded concurrency**: Pace flow starts evenly and cap active flows
+- **Kubernetes manifests**: Run constant or random traffic patterns
+- **Development tools**: Live reload, tests, benchmarks, and CI workflows
 
 ## Quick Start
 
-### Using Pre-built Docker Images
+### Run Prebuilt Docker Images
 
 ```bash
 # Run the echo server
@@ -25,7 +29,7 @@ docker run -p 8080:8080 -p 8082:8082 -p 9090:9090 ghcr.io/philipschmid/echo-serv
 docker run -p 9091:9091 ghcr.io/philipschmid/flow-generator:latest --server host.docker.internal
 ```
 
-### Building from Source
+### Build from Source
 
 ```bash
 # Clone the repository
@@ -45,7 +49,7 @@ For detailed development instructions, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ### Environment Variables
 
-All configuration options can be set via environment variables with the `FLOW_GENERATOR_` prefix:
+Set any option through an environment variable with the `FLOW_GENERATOR_` prefix:
 
 ```bash
 export FLOW_GENERATOR_LOG_LEVEL=debug
@@ -56,7 +60,7 @@ Flags override environment variables, which override `config.{yaml,json,toml}` i
 
 ### Server Configuration
 
-The echo server (`echo-server` / `ghcr.io/philipschmid/echo-server:latest`) accepts the following options:
+Server options for `echo-server` and `ghcr.io/philipschmid/echo-server:latest`:
 
 | Flag | Environment Variable | Default | Description |
 |------|---------------------|---------|-------------|
@@ -72,7 +76,7 @@ The echo server (`echo-server` / `ghcr.io/philipschmid/echo-server:latest`) acce
 
 ### Client Configuration
 
-The flow generator (`flow-generator` / `ghcr.io/philipschmid/flow-generator:latest`) accepts the following options:
+Client options for `flow-generator` and `ghcr.io/philipschmid/flow-generator:latest`:
 
 | Flag | Environment Variable | Default | Description |
 |------|---------------------|---------|-------------|
@@ -143,8 +147,6 @@ kubectl apply -f k8s/client-random.yaml
 
 ### Constant Flow Mode
 
-For predictable traffic patterns:
-
 ```bash
 ./bin/flow-generator \
   --server=localhost \
@@ -164,7 +166,7 @@ In constant mode, each flow lasts `max_concurrent / rate` seconds. The example t
 
 ### Health Checks
 
-The echo server exposes health endpoints on port 8082 by default. The client has no health server.
+The echo server exposes health endpoints on port 8082 by default. The client does not run a health server.
 
 ```bash
 # Liveness probe - basic health check
@@ -187,7 +189,8 @@ Metrics and health listeners bind to all interfaces and do not authenticate requ
 
 At info level, both binaries emit one aggregate progress heartbeat every 30 seconds. Per-flow diagnostics remain at debug level and repeated messages are sampled.
 
-Key metrics include:
+Key metrics:
+
 - `active_tcp_connections`: Current active TCP connections
 - `udp_packets_received_total`: Total UDP packets received
 - `tcp_connections_opened_total`: TCP connections opened by the client or accepted by the server
@@ -207,7 +210,7 @@ The client creates `network.flow` spans; the server creates `tcp.echo` and `udp.
 
 ## Architecture
 
-The two binaries share private packages under `internal/`:
+Both binaries use the private packages under `internal/`:
 
 - **cmd/**: Application entry points (server and client)
 - **internal/**: Private application code
@@ -222,7 +225,7 @@ The two binaries share private packages under `internal/`:
 
 ## Development
 
-This project includes comprehensive development tools:
+The repository includes:
 
 - **Live reload**: run `make install-tools`, then use `make dev-server` or `make dev-client`
 - **Cross-platform builds**: `make build-all`
@@ -235,15 +238,13 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for detailed development instructions.
 
 ### Deep Packet Inspection (DPI) and Protocol Simulation
 
-The generator can send generic TCP or UDP echo traffic to well-known ports, but it does not implement application protocols such as HTTP or DNS. Port choice alone does not make the payload valid L7 traffic.
+The generator sends generic TCP or UDP echo traffic. It does not implement application protocols such as HTTP or DNS, and using a well-known port does not make the payload valid L7 traffic.
 
-**Impact:**
-- **DPI Tools**: May fail to recognize traffic as the intended protocol, potentially classifying it as "Unknown"
-- **Network Policies**: L7-aware policies may not work as expected due to the lack of proper protocol formatting
+As a result, DPI tools may classify the traffic as unknown, and L7-aware network policies may not behave as they would with valid application traffic.
 
 ## Contributing
 
-Contributions are welcome! Please see [DEVELOPMENT.md](DEVELOPMENT.md#contributing) for guidelines.
+Read the [contribution guidelines](DEVELOPMENT.md#contributing) before opening a change.
 
 ## License
 
