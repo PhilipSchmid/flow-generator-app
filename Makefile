@@ -269,10 +269,20 @@ dev-client:
 quick-test: build
 	@printf "$(BLUE)Running quick integration test...$(NC)\n"
 	@printf "$(YELLOW)Starting echo server...$(NC)\n"
-	@./bin/echo-server --tcp-ports-server 8080,8081 --udp-ports-server 9000 --metrics-port 9091 > /tmp/echo-server.log 2>&1 & \
+	@set -eu; \
+		SERVER_PID=""; \
+		CLIENT_PID=""; \
+		cleanup() { \
+			if [ -n "$$CLIENT_PID" ]; then kill "$$CLIENT_PID" 2>/dev/null || true; wait "$$CLIENT_PID" 2>/dev/null || true; fi; \
+			if [ -n "$$SERVER_PID" ]; then kill "$$SERVER_PID" 2>/dev/null || true; wait "$$SERVER_PID" 2>/dev/null || true; fi; \
+		}; \
+		trap cleanup EXIT; \
+		trap 'exit 130' INT; \
+		trap 'exit 143' TERM; \
+		./bin/echo-server --tcp-ports-server 8080,8081 --udp-ports-server 9000 --metrics-port 9091 > /tmp/echo-server.log 2>&1 & \
 		SERVER_PID=$$!; \
 		sleep 2; \
-		if ! kill -0 $$SERVER_PID 2>/dev/null; then \
+		if ! kill -0 "$$SERVER_PID" 2>/dev/null || ! grep -q "Echo server is ready" /tmp/echo-server.log; then \
 			printf "$(RED)✗ Server failed to start$(NC)\n"; \
 			cat /tmp/echo-server.log; \
 			exit 1; \
@@ -284,8 +294,9 @@ quick-test: build
 		printf "$(YELLOW)Running for 10 seconds...$(NC)\n"; \
 		sleep 10; \
 		printf "$(YELLOW)Stopping processes...$(NC)\n"; \
-		kill $$CLIENT_PID 2>/dev/null || true; \
-		wait $$CLIENT_PID 2>/dev/null || true; \
+		kill "$$CLIENT_PID"; \
+		wait "$$CLIENT_PID"; \
+		CLIENT_PID=""; \
 		printf "$(BLUE)\n===== Test Summary =====$(NC)\n"; \
 		printf "$(YELLOW)Server Configuration:$(NC)\n"; \
 		printf "  • TCP ports: 8080, 8081\n"; \
@@ -295,19 +306,24 @@ quick-test: build
 		printf "\n$(YELLOW)Client Configuration:$(NC)\n"; \
 		printf "  • Target: localhost\n"; \
 		printf "  • Rate: 10 flows/second\n"; \
-		printf "  • Flow duration: 0-5 seconds\n"; \
+		printf "  • Flow duration: 1-5 seconds\n"; \
 		printf "  • Metrics port: 9092\n"; \
 		printf "\n$(YELLOW)Test Results:$(NC)\n"; \
 		REQUESTS_SENT=$$(grep -oE "Total Requests Sent.*│\s*[0-9]+" /tmp/flow-generator.log 2>/dev/null | grep -oE "[0-9]+$$" | tail -1 || echo "0"); \
 		TCP_SENT=$$(grep -oE "Total TCP Requests Sent.*│\s*[0-9]+" /tmp/flow-generator.log 2>/dev/null | grep -oE "[0-9]+$$" | tail -1 || echo "0"); \
 		UDP_SENT=$$(grep -oE "Total UDP Requests Sent.*│\s*[0-9]+" /tmp/flow-generator.log 2>/dev/null | grep -oE "[0-9]+$$" | tail -1 || echo "0"); \
-		if [ "$$REQUESTS_SENT" -gt 0 ]; then \
+		REQUESTS_SENT=$${REQUESTS_SENT:-0}; \
+		TCP_SENT=$${TCP_SENT:-0}; \
+		UDP_SENT=$${UDP_SENT:-0}; \
+		if [ "$$REQUESTS_SENT" -gt 0 ] && [ "$$TCP_SENT" -gt 0 ] && [ "$$UDP_SENT" -gt 0 ]; then \
 			printf "$(GREEN)✓ Flow generation successful$(NC)\n"; \
 			printf "  • Total requests sent: $$REQUESTS_SENT\n"; \
 			printf "  • TCP requests: $$TCP_SENT\n"; \
 			printf "  • UDP requests: $$UDP_SENT\n"; \
 		else \
-			printf "$(YELLOW)⚠ No metrics found (this is normal for short tests)$(NC)\n"; \
+			printf "$(RED)✗ Expected both TCP and UDP traffic$(NC)\n"; \
+			cat /tmp/flow-generator.log; \
+			exit 1; \
 		fi; \
 		if grep -q "Echo server is ready" /tmp/echo-server.log 2>/dev/null; then \
 			printf "$(GREEN)✓ Server started and ready$(NC)\n"; \
@@ -322,6 +338,7 @@ quick-test: build
 		printf "\n$(YELLOW)Logs saved to:$(NC)\n"; \
 		printf "  • Server: /tmp/echo-server.log\n"; \
 		printf "  • Client: /tmp/flow-generator.log\n"; \
-		kill $$SERVER_PID 2>/dev/null || true; \
-		wait $$SERVER_PID 2>/dev/null || true
+		kill "$$SERVER_PID"; \
+		wait "$$SERVER_PID"; \
+		SERVER_PID=""
 	@printf "\n$(GREEN)✓ Quick integration test completed$(NC)\n"
