@@ -137,13 +137,11 @@ jobs:
           ### Echo Server
           \`\`\`bash
           docker pull ghcr.io/philipschmid/echo-server:${CURRENT_TAG}
-          docker pull ghcr.io/philipschmid/echo-server:latest
           \`\`\`
 
           ### Flow Generator
           \`\`\`bash
           docker pull ghcr.io/philipschmid/flow-generator:${CURRENT_TAG}
-          docker pull ghcr.io/philipschmid/flow-generator:latest
           \`\`\`
 
           ## Full Changelog
