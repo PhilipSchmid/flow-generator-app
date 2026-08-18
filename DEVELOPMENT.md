@@ -151,7 +151,7 @@ bash scripts/test-scenarios.sh
 make benchmark
 ```
 
-`make test` includes the tests under `test/`, which build both binaries and use dynamically assigned ports. `make quick-test` and `scripts/test-scenarios.sh` use fixed local ports; stop conflicting processes first.
+`make test` includes the tests under `test/`, which build both binaries and use dynamically assigned ports. Its parameter matrix checks TCP-only, UDP-only, mixed, multi-port, capacity-limited, and variable-payload runs against both client summaries and server metrics. `make quick-test` and `scripts/test-scenarios.sh` use fixed local ports; stop conflicting processes first.
 
 ## Code Quality
 
