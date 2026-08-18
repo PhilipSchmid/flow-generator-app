@@ -18,6 +18,7 @@ import (
 	"github.com/PhilipSchmid/flow-generator-app/internal/config"
 	"github.com/PhilipSchmid/flow-generator-app/internal/logging"
 	"github.com/PhilipSchmid/flow-generator-app/internal/metrics"
+	statusapi "github.com/PhilipSchmid/flow-generator-app/internal/status"
 	"github.com/PhilipSchmid/flow-generator-app/internal/tracing"
 	"github.com/PhilipSchmid/flow-generator-app/internal/version"
 
@@ -28,10 +29,11 @@ import (
 
 // ProtocolPort combines a protocol and its associated port
 type ProtocolPort struct {
-	Protocol string
-	Port     int
-	address  string
-	portStr  string
+	Protocol    string
+	Port        int
+	address     string
+	portStr     string
+	statusIndex int
 }
 
 func newProtocolPort(server, protocol string, port int) ProtocolPort {
@@ -148,7 +150,66 @@ func drainStragglerReply(conn net.Conn, buf []byte) {
 }
 
 // generateFlow generates network traffic to the server and reads the echoed response
-func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics.MetricsCollector, pp ProtocolPort, duration float64) {
+type flowOutcome uint8
+
+const (
+	flowCompleted flowOutcome = iota
+	flowCanceled
+	flowFailed
+)
+
+type flowObserver struct {
+	tracker       *statusapi.ClientTracker
+	sampleLatency bool
+}
+
+func (o flowObserver) dialError() {
+	if o.tracker != nil {
+		o.tracker.RecordDialError()
+	}
+}
+func (o flowObserver) readError() {
+	if o.tracker != nil {
+		o.tracker.RecordReadError()
+	}
+}
+func (o flowObserver) writeError() {
+	if o.tracker != nil {
+		o.tracker.RecordWriteError()
+	}
+}
+func (o flowObserver) mismatch() {
+	if o.tracker != nil {
+		o.tracker.RecordMismatch()
+	}
+}
+func (o flowObserver) mtuError() {
+	if o.tracker != nil {
+		o.tracker.RecordMTUError()
+	}
+}
+func (o flowObserver) latency(protocol string, started time.Time) {
+	if o.tracker != nil && o.sampleLatency {
+		o.tracker.ObserveLatency(protocol, time.Since(started))
+	}
+}
+
+func finishFlow(mainCtx context.Context, successful bool) flowOutcome {
+	if mainCtx.Err() != nil {
+		return flowCanceled
+	}
+	if successful {
+		return flowCompleted
+	}
+	return flowFailed
+}
+
+// generateFlow generates network traffic to the server and reads the echoed response.
+func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics.MetricsCollector, pp ProtocolPort, duration float64) flowOutcome {
+	return generateFlowObserved(mainCtx, cfg, mc, pp, duration, flowObserver{})
+}
+
+func generateFlowObserved(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics.MetricsCollector, pp ProtocolPort, duration float64, observer flowObserver) flowOutcome {
 	payloadSize := getPayloadSize(cfg)
 	payload := payloadCache[:payloadSize]
 
@@ -175,9 +236,10 @@ func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics
 		conn, err := dialer.DialContext(flowCtx, "tcp", pp.address)
 		if err != nil {
 			if !expectedFlowEnd(flowCtx, err) {
+				observer.dialError()
 				logging.Logger.Warnf("Failed to connect to %s:%d (TCP): %v", cfg.Server, pp.Port, err)
 			}
-			return
+			return finishFlow(mainCtx, false)
 		}
 		defer func() { _ = conn.Close() }()
 		defer applyFlowDeadline(flowCtx, conn)()
@@ -186,12 +248,14 @@ func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics
 			logging.Logger.Debugf("TCP payload size %d exceeds MSS %d; the network stack will segment it", len(payload), cfg.MSS)
 		}
 
+		echoStarted := time.Now()
 		nSent, err := writeFull(conn, payload)
 		if err != nil {
 			if !expectedFlowEnd(flowCtx, err) {
+				observer.writeError()
 				logging.Logger.Warnf("Failed to write to TCP connection: %v", err)
 			}
-			return
+			return finishFlow(mainCtx, false)
 		}
 		mc.IncRequestsSent("tcp", pp.portStr)
 		mc.AddBytesSent("tcp", pp.portStr, nSent)
@@ -203,7 +267,9 @@ func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics
 		for totalReceived < payloadSize {
 			n, err := conn.Read(buf)
 			if err != nil {
-				if !expectedFlowEnd(flowCtx, err) {
+				expected := expectedFlowEnd(flowCtx, err)
+				if !expected {
+					observer.readError()
 					logging.Logger.Warnf("Failed to read full TCP response: %v", err)
 				}
 				break
@@ -213,6 +279,7 @@ func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics
 		}
 		if totalReceived != payloadSize {
 			if flowCtx.Err() == nil {
+				observer.mismatch()
 				logging.Logger.Warnf("TCP byte mismatch: sent %d bytes, received %d bytes", payloadSize, totalReceived)
 			}
 
@@ -220,6 +287,8 @@ func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics
 			// so a reply the server already sent may still be in flight.
 			// Drain it before Close() -- see drainStragglerReply.
 			drainStragglerReply(conn, buf)
+		} else {
+			observer.latency("tcp", echoStarted)
 		}
 		tcpReadBufferPool.Put(readBuffer)
 
@@ -228,13 +297,15 @@ func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics
 		if logging.DebugEnabled() {
 			logging.Logger.Debugf("TCP flow to %s:%d ended after %.3f seconds", cfg.Server, pp.Port, duration)
 		}
+		return finishFlow(mainCtx, totalReceived == payloadSize)
 	} else { // udp
 		conn, err := dialer.DialContext(flowCtx, "udp", pp.address)
 		if err != nil {
 			if !expectedFlowEnd(flowCtx, err) {
+				observer.dialError()
 				logging.Logger.Warnf("Failed to connect to %s:%d (UDP): %v", cfg.Server, pp.Port, err)
 			}
-			return
+			return finishFlow(mainCtx, false)
 		}
 		defer func() { _ = conn.Close() }()
 		defer applyFlowDeadline(flowCtx, conn)()
@@ -245,21 +316,26 @@ func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics
 			// here would busy-loop for the full flow duration instead of
 			// backing off. Fail the whole flow instead.
 			logging.Logger.Warnf("UDP payload size %d exceeds MTU %d, aborting flow", len(payload), cfg.MTU)
-			return
+			observer.mtuError()
+			return flowFailed
 		}
 
 		buf := make([]byte, payloadSize)
+		successful := false
+		latencyPending := observer.sampleLatency
 		cadence := time.NewTimer(100 * time.Millisecond)
 		defer cadence.Stop()
 		for flowCtx.Err() == nil {
+			echoStarted := time.Now()
 			nSent, err := conn.Write(payload)
 			if err == nil && nSent != len(payload) {
 				err = io.ErrShortWrite
 			}
 			if err != nil {
 				if expectedFlowEnd(flowCtx, err) {
-					return
+					return finishFlow(mainCtx, successful)
 				}
+				observer.writeError()
 				logging.Logger.Warnf("Failed to write to UDP connection: %v", err)
 			} else {
 				mc.IncRequestsSent("udp", pp.portStr)
@@ -278,12 +354,20 @@ func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics
 							logging.Logger.Debugf("Timeout waiting for UDP response from %s:%d", cfg.Server, pp.Port)
 						}
 					} else if flowCtx.Err() == nil {
+						observer.readError()
 						logging.Logger.Warnf("Failed to read from UDP connection: %v", readErr)
 					}
 				} else {
 					mc.AddBytesReceived("udp", pp.portStr, nReceived)
 					if nReceived != payloadSize {
+						observer.mismatch()
 						logging.Logger.Warnf("UDP byte mismatch: sent %d bytes, received %d bytes", payloadSize, nReceived)
+					} else {
+						successful = true
+						if latencyPending {
+							observer.latency("udp", echoStarted)
+							latencyPending = false
+						}
 					}
 				}
 			}
@@ -292,9 +376,10 @@ func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics
 			case <-cadence.C:
 				cadence.Reset(100 * time.Millisecond)
 			case <-flowCtx.Done():
-				return
+				return finishFlow(mainCtx, successful)
 			}
 		}
+		return finishFlow(mainCtx, successful)
 	}
 }
 
@@ -305,6 +390,10 @@ type schedulerStats struct {
 }
 
 func runFlowScheduler(ctx context.Context, rate float64, maxConcurrent, flowCount int, launch func(context.Context)) schedulerStats {
+	return runFlowSchedulerTracked(ctx, rate, maxConcurrent, flowCount, launch, nil)
+}
+
+func runFlowSchedulerTracked(ctx context.Context, rate float64, maxConcurrent, flowCount int, launch func(context.Context), tracker *statusapi.ClientTracker) schedulerStats {
 	interval := time.Duration(float64(time.Second) / rate)
 	if interval < time.Nanosecond {
 		interval = time.Nanosecond
@@ -338,11 +427,17 @@ func runFlowScheduler(ctx context.Context, rate float64, maxConcurrent, flowCoun
 				}()
 				if flowCount > 0 && stats.started >= uint64(flowCount) {
 					stats.limitReached = true
+					if tracker != nil {
+						tracker.SetLimitReached()
+					}
 					wait()
 					return stats
 				}
 			default:
 				stats.skipped++
+				if tracker != nil {
+					tracker.StartSkipped()
+				}
 			}
 		case <-progressTicker.C:
 			logging.Logger.Infow("Flow generation progress",
@@ -373,6 +468,7 @@ func parsePorts(portsStr string) []int {
 }
 
 func main() {
+	startedAt := time.Now().UTC()
 	config.NormalizeFlagNames(pflag.CommandLine)
 
 	// Define command-line flags
@@ -380,6 +476,7 @@ func main() {
 	pflag.String("log-level", "", "Log level: debug, info, warn, error")
 	pflag.String("log-format", "", "Log format: human or json")
 	pflag.String("metrics-port", "", "Port for the metrics server")
+	pflag.String("status-port", "", "Loopback status port for the dashboard (0 to disable)")
 	pflag.Bool("tracing-enabled", false, "Enable tracing")
 	pflag.String("jaeger-endpoint", "", "Jaeger endpoint")
 	pflag.String("server", "", "Server address or hostname")
@@ -457,12 +554,16 @@ func main() {
 	var availablePorts []ProtocolPort
 	if cfg.Protocol == "tcp" || cfg.Protocol == "both" {
 		for _, p := range tcpPorts {
-			availablePorts = append(availablePorts, newProtocolPort(cfg.Server, "tcp", p))
+			pp := newProtocolPort(cfg.Server, "tcp", p)
+			pp.statusIndex = len(availablePorts)
+			availablePorts = append(availablePorts, pp)
 		}
 	}
 	if cfg.Protocol == "udp" || cfg.Protocol == "both" {
 		for _, p := range udpPorts {
-			availablePorts = append(availablePorts, newProtocolPort(cfg.Server, "udp", p))
+			pp := newProtocolPort(cfg.Server, "udp", p)
+			pp.statusIndex = len(availablePorts)
+			availablePorts = append(availablePorts, pp)
 		}
 	}
 
@@ -470,6 +571,49 @@ func main() {
 		logging.Logger.Error("No valid ports available for the selected protocol")
 		os.Exit(1)
 	}
+	statusPorts := make([]statusapi.PortFlowSnapshot, len(availablePorts))
+	for i, pp := range availablePorts {
+		statusPorts[i] = statusapi.PortFlowSnapshot{Protocol: pp.Protocol, Port: pp.Port}
+	}
+	statusTracker := statusapi.NewClientTracker(cfg.Rate, statusPorts)
+	statusServer, err := statusapi.Start(cfg.StatusPort, func() statusapi.Snapshot {
+		client := statusTracker.Snapshot()
+		state := "running"
+		if client.LimitReached {
+			state = "draining"
+		}
+		return statusapi.Snapshot{
+			SchemaVersion: statusapi.SchemaVersion,
+			Role:          "client",
+			Version:       version.Short(),
+			SampledAt:     time.Now().UTC(),
+			StartedAt:     startedAt,
+			State:         state,
+			Configuration: statusapi.Configuration{
+				Target: cfg.Server, Protocol: cfg.Protocol,
+				TCPPorts: tcpPorts, UDPPorts: udpPorts,
+				Rate: cfg.Rate, MaxConcurrent: cfg.MaxConcurrent,
+				MinDuration: cfg.MinDuration, MaxDuration: cfg.MaxDuration,
+				ConstantFlows: cfg.ConstantFlows, FlowTimeout: cfg.FlowTimeout,
+				FlowCount: cfg.FlowCount, PayloadSize: cfg.PayloadSize,
+				MinPayloadSize: cfg.MinPayloadSize, MaxPayloadSize: cfg.MaxPayloadSize,
+				MTU: cfg.MTU, MSS: cfg.MSS, MetricsPort: cfg.MetricsPort,
+				TracingEnabled: cfg.TracingEnabled,
+			},
+			Traffic: mc.Snapshot(),
+			Client:  &client,
+		}
+	})
+	if err != nil {
+		logging.Logger.Fatalf("Failed to start local dashboard status: %v", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := statusServer.Stop(ctx); err != nil {
+			logging.Logger.Errorf("Failed to stop local dashboard status: %v", err)
+		}
+	}()
 
 	signalCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
@@ -493,16 +637,25 @@ func main() {
 		"constant_flows", cfg.ConstantFlows,
 	)
 
-	stats := runFlowScheduler(mainCtx, cfg.Rate, cfg.MaxConcurrent, cfg.FlowCount, func(ctx context.Context) {
+	stats := runFlowSchedulerTracked(mainCtx, cfg.Rate, cfg.MaxConcurrent, cfg.FlowCount, func(ctx context.Context) {
 		// #nosec G404 - math/rand is sufficient for flow scheduling randomization
 		pp := availablePorts[rand.IntN(len(availablePorts))]
+		sampleLatency := statusTracker.FlowStarted(pp.statusIndex)
 		duration := constantDuration
 		if !cfg.ConstantFlows {
 			// #nosec G404 - math/rand is sufficient for flow scheduling randomization
 			duration = cfg.MinDuration + rand.Float64()*(cfg.MaxDuration-cfg.MinDuration)
 		}
-		generateFlow(ctx, cfg, mc, pp, duration)
-	})
+		outcome := generateFlowObserved(ctx, cfg, mc, pp, duration, flowObserver{tracker: statusTracker, sampleLatency: sampleLatency})
+		switch outcome {
+		case flowCompleted:
+			statusTracker.FlowCompleted()
+		case flowCanceled:
+			statusTracker.FlowCanceled()
+		case flowFailed:
+			statusTracker.FlowFailed(pp.statusIndex)
+		}
+	}, statusTracker)
 
 	if stats.limitReached {
 		logging.Logger.Info("Flow count limit reached; final flows drained")

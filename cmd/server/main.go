@@ -16,6 +16,7 @@ import (
 	"github.com/PhilipSchmid/flow-generator-app/internal/logging"
 	"github.com/PhilipSchmid/flow-generator-app/internal/metrics"
 	"github.com/PhilipSchmid/flow-generator-app/internal/server"
+	statusapi "github.com/PhilipSchmid/flow-generator-app/internal/status"
 	"github.com/PhilipSchmid/flow-generator-app/internal/tracing"
 	"github.com/PhilipSchmid/flow-generator-app/internal/version"
 
@@ -43,6 +44,7 @@ func parsePorts(portsStr string) []int {
 }
 
 func main() {
+	startedAt := time.Now().UTC()
 	config.NormalizeFlagNames(pflag.CommandLine)
 
 	// Define command-line flags
@@ -50,6 +52,7 @@ func main() {
 	pflag.String("log-level", "", "Log level: debug, info, warn, error")
 	pflag.String("log-format", "", "Log format: human or json")
 	pflag.String("metrics-port", "", "Port for the metrics server")
+	pflag.String("status-port", "", "Loopback status port for the dashboard (0 to disable)")
 	pflag.String("health-port", "", "Port for the health check server")
 	pflag.Bool("tracing-enabled", false, "Enable tracing")
 	pflag.String("jaeger-endpoint", "", "Jaeger endpoint")
@@ -83,6 +86,7 @@ func main() {
 
 	// Initialize MetricsCollector
 	mc := metrics.NewMetricsCollector()
+	statusTracker := &statusapi.ServerTracker{}
 
 	// Initialize tracing if enabled
 	if cfg.TracingEnabled {
@@ -115,13 +119,13 @@ func main() {
 	manager := server.NewManager()
 
 	// Create handlers
-	tcpHandler := handlers.NewTCPHandler(mc)
-	udpHandler := handlers.NewUDPHandler(mc)
+	tcpHandler := handlers.NewTCPHandlerWithStatus(mc, statusTracker)
+	udpHandler := handlers.NewUDPHandlerWithStatus(mc, statusTracker)
 
 	// Parse and create TCP servers
 	tcpPorts := parsePorts(cfg.TCPPortsServer)
 	for _, port := range tcpPorts {
-		tcpServer := server.NewTCPServer(port, tcpHandler)
+		tcpServer := server.NewTCPServerWithStatus(port, tcpHandler, statusTracker)
 		manager.AddServer(tcpServer)
 	}
 
@@ -140,6 +144,34 @@ func main() {
 	// Mark service as ready after all servers are started
 	healthChecker.SetReady(true)
 	logging.Logger.Info("Echo server is ready")
+
+	statusServer, err := statusapi.Start(cfg.StatusPort, func() statusapi.Snapshot {
+		state := "not_ready"
+		if healthChecker.Ready() {
+			state = "ready"
+		}
+		return statusapi.Snapshot{
+			SchemaVersion: statusapi.SchemaVersion,
+			Role:          "server",
+			Version:       version.Short(),
+			SampledAt:     time.Now().UTC(),
+			StartedAt:     startedAt,
+			State:         state,
+			Configuration: statusapi.Configuration{
+				TCPPorts: tcpPorts, UDPPorts: udpPorts,
+				HealthPort: cfg.HealthPort, MetricsPort: cfg.MetricsPort,
+				TracingEnabled: cfg.TracingEnabled,
+			},
+			Traffic: mc.Snapshot(),
+			Server: &statusapi.ServerSnapshot{
+				Ready: healthChecker.Ready(), Healthy: healthChecker.Healthy(),
+				Errors: statusTracker.Errors(),
+			},
+		}
+	})
+	if err != nil {
+		logging.Logger.Fatalf("Failed to start local dashboard status: %v", err)
+	}
 
 	// Handle termination signals
 	sigChan := make(chan os.Signal, 1)
@@ -177,6 +209,9 @@ func main() {
 	defer shutdownCancel()
 	if err := metricsServer.Stop(shutdownCtx); err != nil {
 		logging.Logger.Errorf("Error stopping metrics server: %v", err)
+	}
+	if err := statusServer.Stop(shutdownCtx); err != nil {
+		logging.Logger.Errorf("Error stopping local dashboard status: %v", err)
 	}
 
 	// Flush metrics

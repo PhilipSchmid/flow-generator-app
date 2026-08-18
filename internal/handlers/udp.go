@@ -8,6 +8,7 @@ import (
 
 	"github.com/PhilipSchmid/flow-generator-app/internal/logging"
 	"github.com/PhilipSchmid/flow-generator-app/internal/metrics"
+	statusmetrics "github.com/PhilipSchmid/flow-generator-app/internal/status"
 	"github.com/PhilipSchmid/flow-generator-app/internal/tracing"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -17,13 +18,17 @@ import (
 // UDPHandler handles UDP packets
 type UDPHandler struct {
 	metricsCollector *metrics.MetricsCollector
+	statusTracker    *statusmetrics.ServerTracker
 }
 
 // NewUDPHandler creates a new UDP handler
 func NewUDPHandler(mc *metrics.MetricsCollector) *UDPHandler {
-	return &UDPHandler{
-		metricsCollector: mc,
-	}
+	return &UDPHandler{metricsCollector: mc}
+}
+
+// NewUDPHandlerWithStatus creates a UDP handler with dashboard error counters.
+func NewUDPHandlerWithStatus(mc *metrics.MetricsCollector, tracker *statusmetrics.ServerTracker) *UDPHandler {
+	return &UDPHandler{metricsCollector: mc, statusTracker: tracker}
 }
 
 // Handle processes UDP packets on the given connection
@@ -37,6 +42,9 @@ func (h *UDPHandler) Handle(conn *net.UDPConn) {
 		n, addr, err := conn.ReadFromUDPAddrPort(buf)
 		if err != nil {
 			if !errors.Is(err, net.ErrClosed) {
+				if h.statusTracker != nil {
+					h.statusTracker.RecordReadError()
+				}
 				logging.Logger.Warnf("UDP read failed on port %s: %v", portStr, err)
 			}
 			return
@@ -61,6 +69,9 @@ func (h *UDPHandler) Handle(conn *net.UDPConn) {
 
 		n, err = conn.WriteToUDPAddrPort(buf[:n], addr)
 		if err != nil {
+			if h.statusTracker != nil {
+				h.statusTracker.RecordWriteError()
+			}
 			if packetSpan != nil {
 				packetSpan.RecordError(err)
 				packetSpan.End()

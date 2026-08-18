@@ -83,6 +83,36 @@ func TestCommonConfigValidate(t *testing.T) {
 			wantErr: true,
 			errMsg:  "invalid log format",
 		},
+		{
+			name: "status endpoint disabled",
+			config: CommonConfig{
+				LogLevel:   "info",
+				LogFormat:  "json",
+				StatusPort: "0",
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid status port",
+			config: CommonConfig{
+				LogLevel:   "info",
+				LogFormat:  "json",
+				StatusPort: "70000",
+			},
+			wantErr: true,
+			errMsg:  "status_port must be a port",
+		},
+		{
+			name: "status and metrics ports conflict",
+			config: CommonConfig{
+				LogLevel:    "info",
+				LogFormat:   "json",
+				MetricsPort: "9190",
+				StatusPort:  "9190",
+			},
+			wantErr: true,
+			errMsg:  "status_port and metrics_port must be different",
+		},
 	}
 
 	for _, tt := range tests {
@@ -410,6 +440,34 @@ func TestServerConfigValidate(t *testing.T) {
 			errMsg:  "health_port conflicts with tcp_ports_server",
 		},
 		{
+			name: "status and health ports conflict",
+			config: ServerConfig{
+				CommonConfig: CommonConfig{
+					LogLevel:   "info",
+					LogFormat:  "json",
+					StatusPort: "9190",
+				},
+				TCPPortsServer: "8080",
+				HealthPort:     "9190",
+			},
+			wantErr: true,
+			errMsg:  "status_port and health_port must be different",
+		},
+		{
+			name: "status and TCP ports conflict",
+			config: ServerConfig{
+				CommonConfig: CommonConfig{
+					LogLevel:   "info",
+					LogFormat:  "json",
+					StatusPort: "8080",
+				},
+				TCPPortsServer: "8080",
+				HealthPort:     "8082",
+			},
+			wantErr: true,
+			errMsg:  "status_port conflicts with tcp_ports_server",
+		},
+		{
 			name: "UDP may share a numeric management port",
 			config: ServerConfig{
 				CommonConfig: CommonConfig{
@@ -452,6 +510,7 @@ func TestLoadClientConfig(t *testing.T) {
 	assert.Equal(t, "debug", config.LogLevel)
 	assert.Equal(t, "localhost", config.Server) // default value
 	assert.Equal(t, "9091", config.MetricsPort)
+	assert.Equal(t, "9191", config.StatusPort)
 	assert.Equal(t, "both", config.Protocol)
 }
 
@@ -468,6 +527,7 @@ func TestLoadServerConfig(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, config)
 	assert.Equal(t, "9999", config.MetricsPort)
+	assert.Equal(t, "9190", config.StatusPort)
 	assert.Equal(t, "8080", config.TCPPortsServer) // default value
 }
 

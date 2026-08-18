@@ -32,6 +32,16 @@ func (c *Checker) SetHealthy(healthy bool) {
 	c.healthy.Store(healthy)
 }
 
+// Ready reports whether the server is ready to accept traffic.
+func (c *Checker) Ready() bool {
+	return c.ready.Load()
+}
+
+// Healthy reports whether the health listener is running normally.
+func (c *Checker) Healthy() bool {
+	return c.healthy.Load()
+}
+
 // Start starts the health check server on the specified port
 func (c *Checker) Start(port string) error {
 	mux := http.NewServeMux()

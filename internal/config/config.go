@@ -32,6 +32,7 @@ type CommonConfig struct {
 	LogLevel       string
 	LogFormat      string
 	MetricsPort    string
+	StatusPort     string
 	TracingEnabled bool
 	JaegerEndpoint string
 }
@@ -79,6 +80,14 @@ func (c *CommonConfig) Validate() error {
 	if c.MetricsPort != "" {
 		if err := validatePort(c.MetricsPort, "metrics_port"); err != nil {
 			return err
+		}
+	}
+	if c.StatusPort != "" && c.StatusPort != "0" {
+		if err := validatePort(c.StatusPort, "status_port"); err != nil {
+			return err
+		}
+		if c.StatusPort == c.MetricsPort {
+			return fmt.Errorf("status_port and metrics_port must be different")
 		}
 	}
 	if c.TracingEnabled {
@@ -206,11 +215,17 @@ func (c *ServerConfig) Validate() error {
 	if c.MetricsPort != "" && c.MetricsPort == c.HealthPort {
 		return fmt.Errorf("metrics_port and health_port must be different")
 	}
+	if c.StatusPort != "" && c.StatusPort != "0" && c.StatusPort == c.HealthPort {
+		return fmt.Errorf("status_port and health_port must be different")
+	}
 	if portListContains(c.TCPPortsServer, c.MetricsPort) {
 		return fmt.Errorf("metrics_port conflicts with tcp_ports_server")
 	}
 	if portListContains(c.TCPPortsServer, c.HealthPort) {
 		return fmt.Errorf("health_port conflicts with tcp_ports_server")
+	}
+	if c.StatusPort != "" && c.StatusPort != "0" && portListContains(c.TCPPortsServer, c.StatusPort) {
+		return fmt.Errorf("status_port conflicts with tcp_ports_server")
 	}
 
 	return nil
@@ -232,6 +247,7 @@ func LoadClientConfig() (*ClientConfig, error) {
 			LogLevel:       viper.GetString("log_level"),
 			LogFormat:      viper.GetString("log_format"),
 			MetricsPort:    viper.GetString("metrics_port"),
+			StatusPort:     viper.GetString("status_port"),
 			TracingEnabled: viper.GetBool("tracing_enabled"),
 			JaegerEndpoint: viper.GetString("jaeger_endpoint"),
 		},
@@ -277,6 +293,7 @@ func LoadServerConfig() (*ServerConfig, error) {
 			LogLevel:       viper.GetString("log_level"),
 			LogFormat:      viper.GetString("log_format"),
 			MetricsPort:    viper.GetString("metrics_port"),
+			StatusPort:     viper.GetString("status_port"),
 			TracingEnabled: viper.GetBool("tracing_enabled"),
 			JaegerEndpoint: viper.GetString("jaeger_endpoint"),
 		},
@@ -330,6 +347,7 @@ func setCommonDefaults() {
 	viper.SetDefault("log_level", "info")
 	viper.SetDefault("log_format", "human")
 	viper.SetDefault("metrics_port", "9090")
+	viper.SetDefault("status_port", "9190")
 	viper.SetDefault("tracing_enabled", false)
 	viper.SetDefault("jaeger_endpoint", "http://localhost:4317")
 }
@@ -338,6 +356,7 @@ func setCommonDefaults() {
 func setClientDefaults() {
 	setCommonDefaults()
 	viper.SetDefault("metrics_port", "9091")
+	viper.SetDefault("status_port", "9191")
 
 	// Client-specific defaults
 	viper.SetDefault("server", "localhost")

@@ -9,6 +9,7 @@ import (
 
 	"github.com/PhilipSchmid/flow-generator-app/internal/logging"
 	"github.com/PhilipSchmid/flow-generator-app/internal/metrics"
+	statusmetrics "github.com/PhilipSchmid/flow-generator-app/internal/status"
 	"github.com/PhilipSchmid/flow-generator-app/internal/tracing"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -23,21 +24,25 @@ var tcpReadBufferPool = sync.Pool{
 // TCPHandler handles TCP connections
 type TCPHandler struct {
 	metricsCollector *metrics.MetricsCollector
+	statusTracker    *statusmetrics.ServerTracker
 }
 
 // NewTCPHandler creates a new TCP handler
 func NewTCPHandler(mc *metrics.MetricsCollector) *TCPHandler {
-	return &TCPHandler{
-		metricsCollector: mc,
-	}
+	return &TCPHandler{metricsCollector: mc}
+}
+
+// NewTCPHandlerWithStatus creates a TCP handler with dashboard error counters.
+func NewTCPHandlerWithStatus(mc *metrics.MetricsCollector, tracker *statusmetrics.ServerTracker) *TCPHandler {
+	return &TCPHandler{metricsCollector: mc, statusTracker: tracker}
 }
 
 // Handle processes a TCP connection
 func (h *TCPHandler) Handle(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
 
-	h.metricsCollector.ActiveTCPConnections.Inc()
-	defer h.metricsCollector.ActiveTCPConnections.Dec()
+	h.metricsCollector.IncActiveTCPConnections()
+	defer h.metricsCollector.DecActiveTCPConnections()
 
 	port := conn.LocalAddr().(*net.TCPAddr).Port
 	portStr := strconv.Itoa(port)
@@ -65,6 +70,9 @@ func (h *TCPHandler) Handle(conn net.Conn) {
 		n, err := conn.Read(buf)
 		if err != nil {
 			if err != io.EOF {
+				if h.statusTracker != nil {
+					h.statusTracker.RecordReadError()
+				}
 				if logging.DebugEnabled() {
 					logging.Logger.Debugf("TCP connection from %s closed: %v", conn.RemoteAddr(), err)
 				}
@@ -78,6 +86,9 @@ func (h *TCPHandler) Handle(conn net.Conn) {
 			count, writeErr := conn.Write(buf[written:n])
 			written += count
 			if writeErr != nil {
+				if h.statusTracker != nil {
+					h.statusTracker.RecordWriteError()
+				}
 				if logging.DebugEnabled() {
 					logging.Logger.Debugf("Failed to write to TCP connection from %s: %v", conn.RemoteAddr(), writeErr)
 				}
