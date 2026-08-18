@@ -2,7 +2,9 @@ package health
 
 import (
 	"io"
+	"net"
 	"net/http"
+	"strconv"
 	"testing"
 	"time"
 
@@ -31,13 +33,11 @@ func TestHealthChecker(t *testing.T) {
 
 func TestHealthServer(t *testing.T) {
 	checker := NewChecker()
-	port := "8082"
 
-	err := checker.Start(port)
+	err := checker.Start("0")
 	require.NoError(t, err)
 	defer func() { _ = checker.Stop() }()
-
-	time.Sleep(100 * time.Millisecond)
+	port := strconv.Itoa(checker.Addr().(*net.TCPAddr).Port)
 
 	resp, err := http.Get("http://localhost:" + port + "/health")
 	require.NoError(t, err)
@@ -72,12 +72,10 @@ func TestHealthServer(t *testing.T) {
 
 func TestHealthServerStop(t *testing.T) {
 	checker := NewChecker()
-	port := "8083"
 
-	err := checker.Start(port)
+	err := checker.Start("0")
 	require.NoError(t, err)
-
-	time.Sleep(100 * time.Millisecond)
+	port := strconv.Itoa(checker.Addr().(*net.TCPAddr).Port)
 
 	resp, err := http.Get("http://localhost:" + port + "/health")
 	require.NoError(t, err)
@@ -92,6 +90,17 @@ func TestHealthServerStop(t *testing.T) {
 	assert.Error(t, err)
 
 	assert.False(t, checker.ready.Load())
+	assert.False(t, checker.healthy.Load())
+}
+
+func TestHealthServerReportsBindFailure(t *testing.T) {
+	listener, err := net.Listen("tcp", ":0")
+	require.NoError(t, err)
+	defer func() { _ = listener.Close() }()
+
+	checker := NewChecker()
+	port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
+	require.Error(t, checker.Start(port))
 	assert.False(t, checker.healthy.Load())
 }
 

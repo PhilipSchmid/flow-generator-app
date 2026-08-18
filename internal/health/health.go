@@ -2,7 +2,9 @@ package health
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -11,9 +13,10 @@ import (
 )
 
 type Checker struct {
-	ready   atomic.Bool
-	healthy atomic.Bool
-	server  *http.Server
+	ready    atomic.Bool
+	healthy  atomic.Bool
+	server   *http.Server
+	listener net.Listener
 }
 
 // NewChecker creates a new health checker
@@ -60,22 +63,31 @@ func (c *Checker) Start(port string) error {
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	listener, err := net.Listen("tcp", c.server.Addr)
+	if err != nil {
+		return fmt.Errorf("listen on health port %s: %w", port, err)
+	}
+	c.listener = listener
 
 	go func() {
-		if logging.Logger != nil {
-			logging.Logger.Infof("Health check server starting on port %s", port)
-		}
-		if err := c.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			if logging.Logger != nil {
-				logging.Logger.Errorf("Health check server error: %v", err)
-			}
+		if err := c.server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logging.Logger.Errorf("Health check server stopped unexpectedly: %v", err)
 		}
 	}()
+	logging.Logger.Infof("Health checks available on %s", listener.Addr())
 
 	// Mark as healthy immediately after starting
 	c.SetHealthy(true)
 
 	return nil
+}
+
+// Addr returns the bound health listener address.
+func (c *Checker) Addr() net.Addr {
+	if c.listener == nil {
+		return nil
+	}
+	return c.listener.Addr()
 }
 
 // Stop gracefully stops the health check server
