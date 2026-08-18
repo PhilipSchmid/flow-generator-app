@@ -37,7 +37,7 @@ spec:
         - "--min_duration=1"
         - "--max_duration=5"
         ports:
-        - containerPort: 9090
+        - containerPort: 9091
           name: metrics
         resources:
           requests:
@@ -46,15 +46,3 @@ spec:
           limits:
             memory: "512Mi"
             cpu: "1000m"
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 8082
-          initialDelaySeconds: 5
-          periodSeconds: 10
-        readinessProbe:
-          httpGet:
-            path: /ready
-            port: 8082
-          initialDelaySeconds: 5
-          periodSeconds: 5
