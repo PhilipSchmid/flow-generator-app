@@ -35,11 +35,11 @@ echo "✅ Scenario 1 passed"
 # Scenario 2: Multiple TCP ports
 echo ""
 echo "=== Scenario 2: Multiple TCP Ports ==="
-./bin/echo-server --tcp_ports_server 8080,8081,8082 --log_level info &
+./bin/echo-server --tcp_ports_server 8080,8081,8083 --log_level info &
 SERVER_PID=$!
 sleep 2
 
-./bin/flow-generator --server localhost --tcp_ports 8080,8081,8082 --rate 20 --flow_timeout 5 --log_level info &
+./bin/flow-generator --server localhost --tcp_ports 8080,8081,8083 --rate 20 --flow_timeout 5 --log_level info &
 CLIENT_PID=$!
 sleep 6
 
