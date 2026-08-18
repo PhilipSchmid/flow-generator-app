@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"testing"
@@ -16,6 +17,12 @@ import (
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 )
+
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "timeout" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
 
 func TestConstructAddress(t *testing.T) {
 	tests := []struct {
@@ -348,6 +355,15 @@ func TestGenerateFlowDoesNotWarnAfterCancellation(t *testing.T) {
 	}
 
 	assert.Empty(t, recorded.All())
+}
+
+func TestExpectedFlowEnd(t *testing.T) {
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	assert.True(t, expectedFlowEnd(canceled, errors.New("connection closed")))
+	assert.True(t, expectedFlowEnd(context.Background(), timeoutError{}))
+	assert.False(t, expectedFlowEnd(context.Background(), errors.New("connection refused")))
 }
 
 func TestConfigValidation(t *testing.T) {
