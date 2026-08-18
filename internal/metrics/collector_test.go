@@ -52,11 +52,8 @@ func testMetricsCollector() *MetricsCollector {
 }
 
 func TestNewMetricsCollector(t *testing.T) {
-	// Reset the flag for testing
-	metricsRegistered = false
-	defer func() { metricsRegistered = false }()
-
 	mc := NewMetricsCollector()
+	second := NewMetricsCollector()
 
 	assert.NotNil(t, mc)
 	assert.NotNil(t, mc.RequestsReceived)
@@ -67,7 +64,9 @@ func TestNewMetricsCollector(t *testing.T) {
 	assert.NotNil(t, mc.UDPPacketsReceived)
 	assert.NotNil(t, mc.ActiveTCPConnections)
 
-	assert.True(t, metricsRegistered)
+	assert.Same(t, mc.RequestsReceived, second.RequestsReceived)
+	assert.Same(t, mc.RequestsSent, second.RequestsSent)
+	assert.Same(t, mc.ActiveTCPConnections, second.ActiveTCPConnections)
 }
 
 func TestIncRequestsReceived(t *testing.T) {
@@ -332,17 +331,6 @@ func TestConcurrentMetricUpdates(t *testing.T) {
 	numGoroutines := 10
 	numOperations := 100
 
-	// Pre-initialize the maps to avoid race conditions during creation
-	mc.IncRequestsReceived("tcp", "8080")
-	mc.IncRequestsSent("tcp", "8080")
-	mc.AddBytesReceived("tcp", "8080", 0)
-	mc.AddBytesSent("tcp", "8080", 0)
-
-	atomic.StoreUint64(&mc.totalRequestsReceived, 0)
-	atomic.StoreUint64(&mc.totalRequestsSent, 0)
-	atomic.StoreUint64(&mc.totalTCPReceived, 0)
-	atomic.StoreUint64(&mc.totalTCPSent, 0)
-
 	for i := 0; i < numGoroutines; i++ {
 		wg.Add(1)
 		go func(id int) {
@@ -365,11 +353,33 @@ func TestConcurrentMetricUpdates(t *testing.T) {
 	assert.Equal(t, expectedCount, atomic.LoadUint64(&mc.totalTCPSent))
 
 	data := mc.getSyncMapData(&mc.requestsReceived)
-	// Add 1 for the pre-initialization
-	assert.Equal(t, expectedCount+1, data["tcp"]["8080"])
+	assert.Equal(t, expectedCount, data["tcp"]["8080"])
 
 	data = mc.getSyncMapData(&mc.bytesReceived)
 	assert.Equal(t, expectedCount*100, data["tcp"]["8080"])
+}
+
+func TestConcurrentCollectorCreation(t *testing.T) {
+	const goroutines = 100
+	collectors := make(chan *MetricsCollector, goroutines)
+	var wg sync.WaitGroup
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			collectors <- NewMetricsCollector()
+		}()
+	}
+	wg.Wait()
+	close(collectors)
+
+	var requestsReceived *prometheus.CounterVec
+	for collector := range collectors {
+		if requestsReceived == nil {
+			requestsReceived = collector.RequestsReceived
+		}
+		assert.Same(t, requestsReceived, collector.RequestsReceived)
+	}
 }
 
 func TestMetricsWithDifferentProtocols(t *testing.T) {
