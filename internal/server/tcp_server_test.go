@@ -210,7 +210,7 @@ func TestTCPServerStopClosesIdleConnections(t *testing.T) {
 	}
 }
 
-func BenchmarkTCPServerConnection(b *testing.B) {
+func BenchmarkTCPServerRoundTrip(b *testing.B) {
 	mc := metrics.NewMetricsCollector()
 	handler := handlers.NewTCPHandler(mc)
 
@@ -227,16 +227,14 @@ func BenchmarkTCPServerConnection(b *testing.B) {
 
 	testData := make([]byte, 1024)
 	buf := make([]byte, 1024)
+	conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	require.NoError(b, err)
+	defer func() { _ = conn.Close() }()
 
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-		if err != nil {
-			b.Fatal(err)
-		}
-
 		_, err = conn.Write(testData)
 		if err != nil {
 			b.Fatal(err)
@@ -246,7 +244,5 @@ func BenchmarkTCPServerConnection(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-
-		_ = conn.Close()
 	}
 }

@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"io"
 	"os"
 	"testing"
 
@@ -140,7 +141,12 @@ func TestConcurrentLogging(t *testing.T) {
 
 func BenchmarkLogging(b *testing.B) {
 	oldLogger := Logger
-	Logger = zap.NewNop().Sugar()
+	core := zapcore.NewCore(
+		zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()),
+		zapcore.AddSync(io.Discard),
+		zap.InfoLevel,
+	)
+	Logger = zap.New(core).Sugar()
 	b.Cleanup(func() { Logger = oldLogger })
 
 	b.Run("Simple", func(b *testing.B) {
