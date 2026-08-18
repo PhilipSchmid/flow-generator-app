@@ -98,3 +98,16 @@ func BenchmarkClientTrackerSnapshot(b *testing.B) {
 		_ = tracker.Snapshot()
 	}
 }
+
+func BenchmarkServerTrackerTCPClientLifecycle(b *testing.B) {
+	tracker := &ServerTracker{}
+	peer := &net.TCPAddr{IP: net.ParseIP("192.0.2.10"), Port: 40001}
+	key := tracker.TCPClientConnected(peer)
+	tracker.TCPClientDisconnected(key)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		key := tracker.TCPClientConnected(peer)
+		tracker.TCPClientDisconnected(key)
+	}
+}

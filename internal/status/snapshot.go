@@ -4,6 +4,7 @@ import (
 	"math"
 	"math/bits"
 	"net"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -284,7 +285,7 @@ type ServerTracker struct {
 	errors errorCounters
 
 	clientsMu      sync.Mutex
-	activeTCPPeers map[string]uint64
+	activeTCPPeers map[netip.Addr]uint64
 }
 
 func (t *ServerTracker) RecordReadError()    { t.errors.read.Add(1) }
@@ -294,14 +295,14 @@ func (t *ServerTracker) Errors() ErrorCounts { return t.errors.snapshot() }
 
 // TCPClientConnected records an active TCP peer and returns its normalized IP
 // key for the matching disconnect call.
-func (t *ServerTracker) TCPClientConnected(address net.Addr) string {
+func (t *ServerTracker) TCPClientConnected(address net.Addr) netip.Addr {
 	key := tcpClientIP(address)
-	if key == "" {
-		return ""
+	if !key.IsValid() {
+		return netip.Addr{}
 	}
 	t.clientsMu.Lock()
 	if t.activeTCPPeers == nil {
-		t.activeTCPPeers = make(map[string]uint64)
+		t.activeTCPPeers = make(map[netip.Addr]uint64)
 	}
 	t.activeTCPPeers[key]++
 	t.clientsMu.Unlock()
@@ -309,8 +310,8 @@ func (t *ServerTracker) TCPClientConnected(address net.Addr) string {
 }
 
 // TCPClientDisconnected removes one active connection for a TCP peer.
-func (t *ServerTracker) TCPClientDisconnected(key string) {
-	if key == "" {
+func (t *ServerTracker) TCPClientDisconnected(key netip.Addr) {
+	if !key.IsValid() {
 		return
 	}
 	t.clientsMu.Lock()
@@ -329,16 +330,19 @@ func (t *ServerTracker) ActiveTCPClients() uint64 {
 	return count
 }
 
-func tcpClientIP(address net.Addr) string {
+func tcpClientIP(address net.Addr) netip.Addr {
 	if address == nil {
-		return ""
+		return netip.Addr{}
 	}
 	if tcpAddress, ok := address.(*net.TCPAddr); ok {
-		return tcpAddress.IP.String()
+		if addr, valid := netip.AddrFromSlice(tcpAddress.IP); valid {
+			return addr.Unmap()
+		}
+		return netip.Addr{}
 	}
-	host, _, err := net.SplitHostPort(address.String())
+	addrPort, err := netip.ParseAddrPort(address.String())
 	if err != nil {
-		return ""
+		return netip.Addr{}
 	}
-	return host
+	return addrPort.Addr().Unmap()
 }
