@@ -1,259 +1,267 @@
 # Development Guide
 
-This guide provides information for developers working on the flow-generator-app project.
+Run the commands in this guide from the repository root.
 
-## Table of Contents
-- [Project Structure](#project-structure)
-- [Getting Started](#getting-started)
-- [Development Workflow](#development-workflow)
+## Contents
+
+- [Project Layout](#project-layout)
+- [Setup](#setup)
+- [Local Development](#local-development)
+- [Building](#building)
+- [Configuration](#configuration)
 - [Testing](#testing)
 - [Code Quality](#code-quality)
+- [Docker](#docker)
+- [Debugging](#debugging)
+- [Performance Checks](#performance-checks)
 - [Contributing](#contributing)
+- [Releasing](#releasing)
 
-## Project Structure
+## Project Layout
 
-```
+```text
 flow-generator-app/
-├── cmd/                    # Application entry points
-│   ├── client/            # Flow generator client
-│   └── server/            # Echo server
-├── internal/              # Private application code
-│   ├── config/           # Configuration management
-│   ├── handlers/         # Protocol handlers (TCP/UDP)
-│   ├── health/           # Health check server
-│   ├── logging/          # Logging utilities
-│   ├── metrics/          # Prometheus metrics
-│   ├── server/           # Server implementations
-│   ├── tracing/          # OpenTelemetry tracing
-│   └── version/          # Version information
-├── k8s/                   # Kubernetes manifests
-├── scripts/               # Utility scripts
-└── .github/workflows/     # CI/CD pipelines
+├── cmd/
+│   ├── client/             # Flow generator
+│   └── server/             # Echo server
+├── internal/
+│   ├── config/             # Configuration and validation
+│   ├── handlers/           # TCP and UDP handlers
+│   ├── health/             # Server health endpoints
+│   ├── logging/            # Structured logging
+│   ├── metrics/            # Prometheus and shutdown metrics
+│   ├── server/             # TCP/UDP server lifecycle
+│   ├── tracing/            # OpenTelemetry setup
+│   └── version/            # Build metadata
+├── test/                   # Binary-level integration tests
+├── k8s/                    # Kubernetes manifests
+├── scripts/                # Setup and scenario scripts
+├── .github/workflows/      # CI and release automation
+├── Dockerfile.client
+├── Dockerfile.server
+└── Makefile
 ```
 
-## Getting Started
+## Setup
 
-### Prerequisites
-- Go 1.25 or later
-- Docker (for container builds)
+Requirements:
+
+- Go 1.25 or newer
 - Make
+- Docker for container targets
+- `curl` if `make install-tools` needs to install golangci-lint
 
-### Initial Setup
+Clone and prepare the repository:
 
-1. Clone the repository:
 ```bash
 git clone https://github.com/PhilipSchmid/flow-generator-app.git
 cd flow-generator-app
-```
-
-2. Install development tools:
-```bash
 make install-tools
-```
-
-3. Download dependencies:
-```bash
 make deps
-```
-
-4. Run tests to verify setup:
-```bash
 make test
 ```
 
-## Development Workflow
+`make deps` downloads modules and runs `go mod tidy`, so it may update `go.mod` or `go.sum` when they are stale. `scripts/dev-setup.sh` runs the setup, build, and test steps and installs a local pre-commit hook.
 
-### Live Development
-The project supports live reload for rapid development:
+Run `make help` for the current target list.
+
+## Local Development
+
+Start the server and client in separate terminals:
 
 ```bash
-# Run server with live reload (recommended for development)
-make dev
-
-# Run server with live reload (same as 'make dev')
+# Terminal 1
 make dev-server
 
-# Run client with live reload (in a separate terminal)
+# Terminal 2
 make dev-client
 ```
 
-For typical development, run `make dev` in one terminal to start the server, then manually run the client in another terminal when you need to test.
+Both targets use [Air](https://github.com/air-verse/air) and rebuild on Go source changes. The client connects to `localhost` with its normal defaults.
 
-### Building
+For a finite mixed TCP/UDP smoke test:
+
 ```bash
-# Build for current platform
+make quick-test
+```
+
+The smoke test runs for 10 seconds and requires ports 8080, 8081, 8082, 9000, 9091, and 9092. Logs are written to `/tmp/echo-server.log` and `/tmp/flow-generator.log`.
+
+## Building
+
+```bash
+# Current platform
 make build
 
-# Build for all platforms
-make build-all
-
-# Build specific component
+# One binary
 make build-server
 make build-client
+
+# Linux, macOS, and Windows targets
+make build-all
 ```
 
-### Running Locally
-```bash
-# Using make
-make quick-test
+Current-platform binaries are written to `bin/`. Cross-platform binaries use `bin/<os>/<arch>/`; Windows outputs include `.exe`.
 
-# Manual execution
-./bin/echo-server --tcp_ports_server 8080,8081 --udp_ports_server 9000
-./bin/flow-generator --server localhost --tcp_ports 8080,8081 --rate 10
-```
+## Configuration
 
-### Configuration
-The application supports configuration through:
+Configuration precedence is:
+
 1. Command-line flags
-2. Environment variables (prefix: `FLOW_GENERATOR_`)
-3. Configuration files
+2. `FLOW_GENERATOR_` environment variables
+3. `config.yaml`, `config.json`, or `config.toml`
+4. Built-in defaults
 
-Example:
+Config files are read from the current directory, `/etc/flow-generator`, or `~/.flow-generator`. CLI flags use hyphens, such as `--max-concurrent`. Existing underscore spellings such as `--max_concurrent` remain accepted. Environment variables and config keys keep their underscore form.
+
+Examples:
+
 ```bash
-# Using environment variables
 export FLOW_GENERATOR_LOG_LEVEL=debug
 export FLOW_GENERATOR_METRICS_PORT=9090
 
-# Using flags
-./bin/echo-server --log_level debug --metrics_port 9090
+./bin/echo-server --log-level debug --metrics-port 9090
+./bin/flow-generator --server localhost --tcp-ports 8080 --rate 10
 ```
+
+See [README.md](README.md#configuration) for every option and default.
 
 ## Testing
 
-### Unit Tests
 ```bash
-# Run all tests
+# Unit and binary-level integration tests
 make test
 
-# Run with verbose output
+# Verbose output
 make test-verbose
 
-# Run with race detector
+# Race detector
 make test-race
 
-# Generate coverage report
+# HTML coverage report at coverage/coverage.html
 make test-coverage
-```
 
-### Benchmarks
-```bash
+# Local fixed-port TCP/UDP smoke test
+make quick-test
+
+# Seven local traffic scenarios
+bash scripts/test-scenarios.sh
+
+# Benchmarks with allocation counts
 make benchmark
 ```
 
-### Integration Tests
-```bash
-make quick-test
-```
+`make test` includes the tests under `test/`, which build both binaries and use dynamically assigned ports. `make quick-test` and `scripts/test-scenarios.sh` use fixed local ports; stop conflicting processes first.
 
 ## Code Quality
 
-### Linting
-The project uses golangci-lint for code quality checks:
-
 ```bash
-make lint
+make fmt       # Rewrite Go files with gofmt
+make vet       # Run go vet
+make lint      # Run golangci-lint with the CI flags
+make mod-tidy  # Run go mod tidy
 ```
 
-### Formatting
+Before committing a code change:
+
 ```bash
-# Format all code
 make fmt
-
-# Run go vet
-make vet
+make mod-tidy
+git diff --check
+make lint
+make test-race
+make build-all
 ```
 
-### Pre-commit Checklist
-Before committing:
-1. Run `make fmt` to format code
-2. Run `make lint` to check for issues
-3. Run `make test` to ensure tests pass
-4. Update documentation if needed
+Run `make quick-test` after network behavior changes and `make docker-build` after Dockerfile changes. CI also runs staticcheck, gosec, integration tests, and Linux container builds.
 
-## Contributing
+## Docker
 
-### Git Workflow
-1. Create a feature branch from `main`
-2. Make your changes
-3. Add tests for new functionality
-4. Ensure all tests pass
-5. Submit a pull request
-
-### Commit Messages
-Follow conventional commit format:
-- `feat:` New feature
-- `fix:` Bug fix
-- `docs:` Documentation changes
-- `test:` Test additions/changes
-- `refactor:` Code refactoring
-- `chore:` Maintenance tasks
-
-### Pull Request Process
-1. Update the README.md with details of changes if applicable
-2. Ensure CI/CD checks pass
-3. Request review from maintainers
-4. Squash commits before merging
-
-## Docker Development
-
-### Building Images
 ```bash
-# Build all images
+# Build both images for the current Docker platform
 make docker-build
 
-# Run containers locally
+# Build and start the echo server container
 make docker-run
+
+# Stop and remove that container
+make docker-stop
 ```
 
-### Multi-platform Builds
-The Dockerfiles support multi-platform builds (linux/amd64, linux/arm64).
+`make docker-run` publishes TCP 8080, health 8082, and metrics 9090. It does not start the client. The release workflow builds both images for `linux/amd64` and `linux/arm64`.
 
 ## Debugging
 
-### Enable Debug Logging
+Enable debug logs with `--log-level debug` or `FLOW_GENERATOR_LOG_LEVEL=debug`.
+
+Default local endpoints:
+
+- Server metrics: `http://localhost:9090/metrics`
+- Client metrics: `http://localhost:9091/metrics`
+- Server health: `http://localhost:8082/health`
+- Server readiness: `http://localhost:8082/ready`
+
+Common failures:
+
+- **Address already in use**: stop the process holding the configured listener port.
+- **Permission denied**: ports below 1024 may require extra privileges.
+- **Connection refused**: confirm the server address, protocol, and port match the client.
+- **Dropped starts**: raise `max-concurrent`, shorten flow duration, or lower `rate`.
+
+## Performance Checks
+
+Use finite runs while tuning:
+
 ```bash
-./bin/echo-server --log_level debug
+# High flow churn without an immediate concurrency bottleneck
+./bin/flow-generator \
+  --server localhost \
+  --rate 1000 \
+  --max-concurrent 1000 \
+  --min-duration 0.1 \
+  --max-duration 0.5 \
+  --flow-timeout 30
+
+# Longer-lived flows
+./bin/flow-generator \
+  --server localhost \
+  --rate 10 \
+  --max-concurrent 2000 \
+  --min-duration 60 \
+  --max-duration 300 \
+  --flow-timeout 300
 ```
 
-### Endpoints
-- Prometheus metrics: `http://localhost:9090/metrics`
-- Health check: `http://localhost:8082/health`
-- Readiness check: `http://localhost:8082/ready`
+`rate` controls flow starts, not packets or bandwidth. Starts are dropped when `max-concurrent` is full. Watch `starts_skipped_at_capacity` in the client progress log and use Prometheus metrics for traffic totals. `make benchmark` measures local CPU and allocation costs; it is not a network-capacity test.
 
-### Common Issues
+## Contributing
 
-1. **Port already in use**: Check for existing processes using the port
-2. **Permission denied**: Some ports (< 1024) require elevated privileges
-3. **Connection refused**: Ensure the server is running and accessible
+1. Branch from `main`.
+2. Keep each commit focused and add tests for behavior changes.
+3. Commit with automatic sign-off: `git commit -s`.
+4. Run the relevant checks above.
+5. Open a pull request and wait for CI.
 
-## Performance Testing
+Use Conventional Commit subjects such as `feat:`, `fix:`, `docs:`, `test:`, `perf:`, or `chore:`. Pull requests are rebase-merged to keep history linear.
 
-### Load Testing
+## Releasing
+
+Tags drive releases. There is no version file or checked-in changelog to update.
+
+1. Rebase-merge the intended changes and confirm `main` CI passes.
+2. Create a signed SemVer tag on the release commit.
+3. Push that tag.
+
 ```bash
-# High rate test
-./bin/flow-generator --server localhost --rate 1000 --max_concurrent 500
-
-# Long duration test
-./bin/flow-generator --server localhost --min_duration 60 --max_duration 300
+git tag -s v1.2.3 -m "v1.2.3"
+git push origin v1.2.3
 ```
 
-### Monitoring
-- Use Prometheus metrics for monitoring performance
-- Enable tracing for distributed tracing analysis
+The tag workflow builds and pushes both multi-platform images, generates SBOM artifacts, creates release notes from commit subjects, and publishes the GitHub release. It does not rerun the CI test suite, so tag only a commit that has already passed CI. Tags containing `-rc`, `-beta`, `-alpha`, or `-pre` produce prereleases.
 
-## Release Process
+## References
 
-1. Update version numbers
-2. Update CHANGELOG.md
-3. Create and push a tag: `git tag v1.2.3 && git push origin v1.2.3`
-4. GitHub Actions will automatically:
-   - Run tests
-   - Build and push Docker images
-   - Create a GitHub release
-
-## Additional Resources
-
-- [Go Documentation](https://golang.org/doc/)
-- [Prometheus Best Practices](https://prometheus.io/docs/practices/)
-- [OpenTelemetry Go](https://opentelemetry.io/docs/instrumentation/go/)
-- [Docker Best Practices](https://docs.docker.com/develop/dev-best-practices/)
+- [Go documentation](https://go.dev/doc/)
+- [Prometheus practices](https://prometheus.io/docs/practices/)
+- [OpenTelemetry Go](https://opentelemetry.io/docs/languages/go/)
+- [Docker build best practices](https://docs.docker.com/build/building/best-practices/)
