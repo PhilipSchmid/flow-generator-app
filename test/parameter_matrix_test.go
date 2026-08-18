@@ -1,0 +1,355 @@
+package test
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"os/exec"
+	"regexp"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestClientServerParameterMatrix(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration parameter matrix in short mode")
+	}
+
+	serverBinary := buildSentinelBinary(t, "echo-server", "../cmd/server")
+	clientBinary := buildSentinelBinary(t, "flow-generator", "../cmd/client")
+
+	t.Run("TCP only with fixed payload", func(t *testing.T) {
+		tcpPort := findAvailablePort(t)
+		server := startSentinelServer(t, serverBinary,
+			"--tcp-ports-server", strconv.Itoa(tcpPort),
+			"--udp-ports-server=",
+		)
+
+		output := runSentinelClient(t, clientBinary,
+			"--server", "127.0.0.1",
+			"--protocol", "tcp",
+			"--tcp-ports", strconv.Itoa(tcpPort),
+			"--udp-ports=",
+			"--rate", "250",
+			"--max-concurrent", "8",
+			"--flow-count", "8",
+			"--min-duration", "0.02",
+			"--max-duration", "0.02",
+			"--payload-size", "64",
+		)
+
+		assert.Equal(t, uint64(8), clientSummaryValue(t, output, "Total Requests Sent"))
+		assert.Equal(t, uint64(8), clientSummaryValue(t, output, "Total TCP Requests Sent"))
+		assert.Equal(t, uint64(0), clientSummaryValue(t, output, "Total UDP Requests Sent"))
+
+		metrics := scrapeSentinelMetrics(t, server.metricsPort)
+		assert.Equal(t, float64(8), prometheusValue(t, metrics, "requests_received_total", "tcp", tcpPort))
+		assert.Equal(t, float64(8*64), prometheusValue(t, metrics, "bytes_received_total", "tcp", tcpPort))
+	})
+
+	t.Run("UDP only with one packet per flow", func(t *testing.T) {
+		udpPort := findAvailableUDPPort(t)
+		server := startSentinelServer(t, serverBinary,
+			"--tcp-ports-server=",
+			"--udp-ports-server", strconv.Itoa(udpPort),
+		)
+
+		output := runSentinelClient(t, clientBinary,
+			"--server", "127.0.0.1",
+			"--protocol", "udp",
+			"--tcp-ports=",
+			"--udp-ports", strconv.Itoa(udpPort),
+			"--rate", "200",
+			"--max-concurrent", "6",
+			"--flow-count", "6",
+			"--min-duration", "0.01",
+			"--max-duration", "0.01",
+			"--payload-size", "128",
+		)
+
+		assert.Equal(t, uint64(6), clientSummaryValue(t, output, "Total Requests Sent"))
+		assert.Equal(t, uint64(0), clientSummaryValue(t, output, "Total TCP Requests Sent"))
+		assert.Equal(t, uint64(6), clientSummaryValue(t, output, "Total UDP Requests Sent"))
+
+		metrics := scrapeSentinelMetrics(t, server.metricsPort)
+		assert.Equal(t, float64(6), prometheusValue(t, metrics, "requests_received_total", "udp", udpPort))
+		assert.Equal(t, float64(6*128), prometheusValue(t, metrics, "bytes_received_total", "udp", udpPort))
+	})
+
+	t.Run("mixed protocols", func(t *testing.T) {
+		tcpPort := findAvailablePort(t)
+		udpPort := findAvailableUDPPort(t)
+		server := startSentinelServer(t, serverBinary,
+			"--tcp-ports-server", strconv.Itoa(tcpPort),
+			"--udp-ports-server", strconv.Itoa(udpPort),
+		)
+
+		output := runSentinelClient(t, clientBinary,
+			"--server", "127.0.0.1",
+			"--protocol", "both",
+			"--tcp-ports", strconv.Itoa(tcpPort),
+			"--udp-ports", strconv.Itoa(udpPort),
+			"--rate", "1000",
+			"--max-concurrent", "100",
+			"--flow-count", "100",
+			"--min-duration", "0.01",
+			"--max-duration", "0.01",
+			"--payload-size", "32",
+		)
+
+		tcpSent := clientSummaryValue(t, output, "Total TCP Requests Sent")
+		udpSent := clientSummaryValue(t, output, "Total UDP Requests Sent")
+		assert.Positive(t, tcpSent)
+		assert.Positive(t, udpSent)
+		assert.Equal(t, uint64(100), tcpSent+udpSent)
+
+		metrics := scrapeSentinelMetrics(t, server.metricsPort)
+		tcpReceived := prometheusValue(t, metrics, "requests_received_total", "tcp", tcpPort)
+		udpReceived := prometheusValue(t, metrics, "requests_received_total", "udp", udpPort)
+		assert.Equal(t, float64(tcpSent), tcpReceived)
+		assert.Equal(t, float64(udpSent), udpReceived)
+		assert.Equal(t, float64(100*32),
+			prometheusValue(t, metrics, "bytes_received_total", "tcp", tcpPort)+
+				prometheusValue(t, metrics, "bytes_received_total", "udp", udpPort),
+		)
+	})
+
+	t.Run("multiple TCP ports", func(t *testing.T) {
+		firstPort := findAvailablePort(t)
+		secondPort := findUniqueSentinelPort(t, map[int]struct{}{firstPort: {}})
+		server := startSentinelServer(t, serverBinary,
+			"--tcp-ports-server", fmt.Sprintf("%d,%d", firstPort, secondPort),
+			"--udp-ports-server=",
+		)
+
+		output := runSentinelClient(t, clientBinary,
+			"--server", "127.0.0.1",
+			"--protocol", "tcp",
+			"--tcp-ports", fmt.Sprintf("%d,%d", firstPort, secondPort),
+			"--rate", "1000",
+			"--max-concurrent", "100",
+			"--flow-count", "100",
+			"--min-duration", "0.01",
+			"--max-duration", "0.01",
+			"--payload-size", "48",
+		)
+
+		assert.Equal(t, uint64(100), clientSummaryValue(t, output, "Total TCP Requests Sent"))
+		metrics := scrapeSentinelMetrics(t, server.metricsPort)
+		firstReceived := prometheusValue(t, metrics, "requests_received_total", "tcp", firstPort)
+		secondReceived := prometheusValue(t, metrics, "requests_received_total", "tcp", secondPort)
+		assert.Positive(t, firstReceived)
+		assert.Positive(t, secondReceived)
+		assert.Equal(t, float64(100), firstReceived+secondReceived)
+	})
+
+	t.Run("capacity pressure drops starts but reaches flow count", func(t *testing.T) {
+		tcpPort := findAvailablePort(t)
+		server := startSentinelServer(t, serverBinary,
+			"--tcp-ports-server", strconv.Itoa(tcpPort),
+			"--udp-ports-server=",
+		)
+
+		output := runSentinelClient(t, clientBinary,
+			"--server", "127.0.0.1",
+			"--protocol", "tcp",
+			"--tcp-ports", strconv.Itoa(tcpPort),
+			"--rate", "1000",
+			"--max-concurrent", "2",
+			"--flow-count", "10",
+			"--min-duration", "0.05",
+			"--max-duration", "0.05",
+			"--payload-size", "16",
+			"--log-level", "info",
+		)
+
+		assert.Equal(t, uint64(10), clientSummaryValue(t, output, "Total TCP Requests Sent"))
+		assert.Positive(t, structuredLogValue(t, output, "starts_skipped_at_capacity"))
+		metrics := scrapeSentinelMetrics(t, server.metricsPort)
+		assert.Equal(t, float64(10), prometheusValue(t, metrics, "requests_received_total", "tcp", tcpPort))
+	})
+
+	t.Run("variable TCP payload range", func(t *testing.T) {
+		tcpPort := findAvailablePort(t)
+		server := startSentinelServer(t, serverBinary,
+			"--tcp-ports-server", strconv.Itoa(tcpPort),
+			"--udp-ports-server=",
+		)
+
+		const flowCount = 20
+		output := runSentinelClient(t, clientBinary,
+			"--server", "127.0.0.1",
+			"--protocol", "tcp",
+			"--tcp-ports", strconv.Itoa(tcpPort),
+			"--rate", "500",
+			"--max-concurrent", "20",
+			"--flow-count", strconv.Itoa(flowCount),
+			"--min-duration", "0.01",
+			"--max-duration", "0.01",
+			"--min-payload-size", "64",
+			"--max-payload-size", "128",
+		)
+
+		assert.Equal(t, uint64(flowCount), clientSummaryValue(t, output, "Total TCP Requests Sent"))
+		metrics := scrapeSentinelMetrics(t, server.metricsPort)
+		bytesReceived := prometheusValue(t, metrics, "bytes_received_total", "tcp", tcpPort)
+		assert.GreaterOrEqual(t, bytesReceived, float64(flowCount*64))
+		assert.LessOrEqual(t, bytesReceived, float64(flowCount*128))
+	})
+
+	t.Run("invalid UDP payload is rejected before dialing", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, clientBinary,
+			"--protocol", "udp",
+			"--tcp-ports=",
+			"--udp-ports", strconv.Itoa(findAvailableUDPPort(t)),
+			"--payload-size", "1501",
+			"--mtu", "1500",
+		)
+		output, err := cmd.CombinedOutput()
+		require.Error(t, err)
+		assert.Contains(t, string(output), "UDP payload size cannot exceed MTU")
+		assert.NoError(t, ctx.Err())
+	})
+}
+
+type sentinelServer struct {
+	metricsPort int
+}
+
+func buildSentinelBinary(t *testing.T, name, packagePath string) string {
+	t.Helper()
+	path := t.TempDir() + "/" + name
+	cmd := exec.Command("go", "build", "-o", path, packagePath)
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, "build %s: %s", name, string(output))
+	return path
+}
+
+func startSentinelServer(t *testing.T, binary string, protocolArgs ...string) sentinelServer {
+	t.Helper()
+	usedPorts := sentinelPorts(protocolArgs)
+	metricsPort := findUniqueSentinelPort(t, usedPorts)
+	usedPorts[metricsPort] = struct{}{}
+	healthPort := findUniqueSentinelPort(t, usedPorts)
+	args := append([]string{}, protocolArgs...)
+	args = append(args,
+		"--metrics-port", strconv.Itoa(metricsPort),
+		"--health-port", strconv.Itoa(healthPort),
+		"--log-level", "error",
+	)
+
+	cmd := exec.Command(binary, args...)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() {
+		if cmd.ProcessState == nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+	})
+
+	waitForReady(t, healthPort)
+	return sentinelServer{metricsPort: metricsPort}
+}
+
+func runSentinelClient(t *testing.T, binary string, args ...string) string {
+	t.Helper()
+	metricsPort := findAvailablePort(t)
+	args = append(args,
+		"--metrics-port", strconv.Itoa(metricsPort),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binary, args...)
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, "client failed: %s", string(output))
+	require.NoError(t, ctx.Err())
+	return string(output)
+}
+
+func sentinelPorts(args []string) map[int]struct{} {
+	ports := make(map[int]struct{})
+	for _, arg := range args {
+		for _, value := range strings.Split(arg, ",") {
+			value = strings.TrimPrefix(value, "--tcp-ports-server=")
+			value = strings.TrimPrefix(value, "--udp-ports-server=")
+			if port, err := strconv.Atoi(value); err == nil {
+				ports[port] = struct{}{}
+			}
+		}
+	}
+	return ports
+}
+
+func findUniqueSentinelPort(t *testing.T, used map[int]struct{}) int {
+	t.Helper()
+	for range 20 {
+		port := findAvailablePort(t)
+		if _, exists := used[port]; !exists {
+			return port
+		}
+	}
+	t.Fatal("could not find a distinct TCP port")
+	return 0
+}
+
+func scrapeSentinelMetrics(t *testing.T, port int) string {
+	t.Helper()
+	client := http.Client{Timeout: time.Second}
+	response, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/metrics", port))
+	require.NoError(t, err)
+	defer func() { _ = response.Body.Close() }()
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	body, err := io.ReadAll(response.Body)
+	require.NoError(t, err)
+	return string(body)
+}
+
+func prometheusValue(t *testing.T, metrics, name, protocol string, port int) float64 {
+	t.Helper()
+	protocolLabel := `protocol="` + protocol + `"`
+	portLabel := `port="` + strconv.Itoa(port) + `"`
+	for _, line := range strings.Split(metrics, "\n") {
+		if !strings.HasPrefix(line, name+"{") ||
+			!strings.Contains(line, protocolLabel) ||
+			!strings.Contains(line, portLabel) {
+			continue
+		}
+		fields := strings.Fields(line)
+		require.NotEmpty(t, fields)
+		value, err := strconv.ParseFloat(fields[len(fields)-1], 64)
+		require.NoError(t, err)
+		return value
+	}
+	t.Fatalf("metric %s{%s,%s} not found", name, protocolLabel, portLabel)
+	return 0
+}
+
+func clientSummaryValue(t *testing.T, output, name string) uint64 {
+	t.Helper()
+	pattern := regexp.MustCompile(regexp.QuoteMeta(name) + `\s*│\s*([0-9]+)`)
+	match := pattern.FindStringSubmatch(output)
+	require.Len(t, match, 2, "summary metric %q not found in:\n%s", name, output)
+	value, err := strconv.ParseUint(match[1], 10, 64)
+	require.NoError(t, err)
+	return value
+}
+
+func structuredLogValue(t *testing.T, output, name string) uint64 {
+	t.Helper()
+	pattern := regexp.MustCompile(`"` + regexp.QuoteMeta(name) + `":\s*([0-9]+)`)
+	matches := pattern.FindAllStringSubmatch(output, -1)
+	require.NotEmpty(t, matches, "log field %q not found in:\n%s", name, output)
+	value, err := strconv.ParseUint(matches[len(matches)-1][1], 10, 64)
+	require.NoError(t, err)
+	return value
+}
