@@ -23,14 +23,17 @@ Run the commands in this guide from the repository root.
 flow-generator-app/
 ├── cmd/
 │   ├── client/             # Flow generator
+│   ├── dashboard/          # Terminal dashboard
 │   └── server/             # Echo server
 ├── internal/
 │   ├── config/             # Configuration and validation
+│   ├── dashboard/          # TUI model, history, and rendering
 │   ├── handlers/           # TCP and UDP handlers
 │   ├── health/             # Server health endpoints
 │   ├── logging/            # Structured logging
 │   ├── metrics/            # Prometheus and shutdown metrics
 │   ├── server/             # TCP/UDP server lifecycle
+│   ├── status/             # Loopback status API and runtime counters
 │   ├── tracing/            # OpenTelemetry setup
 │   └── version/            # Build metadata
 ├── test/                   # Binary-level integration tests
@@ -85,7 +88,7 @@ For a finite mixed TCP/UDP smoke test:
 make quick-test
 ```
 
-The smoke test runs for 10 seconds and requires ports 8080, 8081, 8082, 9000, 9091, and 9092. Logs are written to `/tmp/echo-server.log` and `/tmp/flow-generator.log`.
+The smoke test runs for 10 seconds and requires ports 8080, 8081, 8082, 9000, 9091, 9092, 9190, and 9191. Logs are written to `/tmp/echo-server.log` and `/tmp/flow-generator.log`.
 
 ## Building
 
@@ -96,6 +99,7 @@ make build
 # One binary
 make build-server
 make build-client
+make build-dashboard
 
 # Linux, macOS, and Windows targets
 make build-all
@@ -144,14 +148,14 @@ make test-coverage
 # Local fixed-port TCP/UDP smoke test
 make quick-test
 
-# Seven local traffic scenarios
+# Seven additional local traffic scenarios
 bash scripts/test-scenarios.sh
 
 # Benchmarks with allocation counts
 make benchmark
 ```
 
-`make test` includes the tests under `test/`, which build both binaries and use dynamically assigned ports. Its parameter matrix checks TCP-only, UDP-only, mixed, multi-port, capacity-limited, and variable-payload runs against both client summaries and server metrics. `make quick-test` and `scripts/test-scenarios.sh` use fixed local ports; stop conflicting processes first.
+`make test` includes the tests under `test/`, which build both binaries and use dynamically assigned ports. Its parameter matrix checks TCP-only, UDP-only, mixed, multi-port, capacity-limited, variable-payload, and live dashboard-status runs against client summaries, status snapshots, and server metrics. `make quick-test` and `scripts/test-scenarios.sh` use fixed local ports; stop conflicting processes first.
 
 ## Code Quality
 
@@ -198,6 +202,8 @@ Default local endpoints:
 
 - Server metrics: `http://localhost:9090/metrics`
 - Client metrics: `http://localhost:9091/metrics`
+- Server dashboard status: `http://127.0.0.1:9190/api/v1/status`
+- Client dashboard status: `http://127.0.0.1:9191/api/v1/status`
 - Server health: `http://localhost:8082/health`
 - Server readiness: `http://localhost:8082/ready`
 
@@ -207,6 +213,8 @@ Common failures:
 - **Permission denied**: ports below 1024 may require extra privileges.
 - **Connection refused**: confirm the server address, protocol, and port match the client.
 - **Dropped starts**: raise `max-concurrent`, shorten flow duration, or lower `rate`.
+
+Run `bin/dashboard` in a third terminal while developing locally. It auto-detects the default status port. The model keeps 15 minutes of one-second samples in memory; no history is written to disk. Use `--color=never` for deterministic render debugging.
 
 ## Performance Checks
 
@@ -232,7 +240,7 @@ Use finite runs while tuning:
   --flow-timeout 300
 ```
 
-`rate` controls flow starts, not packets or bandwidth. Starts are dropped when `max-concurrent` is full. Watch `starts_skipped_at_capacity` in the client progress log and use Prometheus metrics for traffic totals. `make benchmark` measures local CPU and allocation costs; it is not a network-capacity test.
+`rate` controls flow starts, not packets or bandwidth. Starts are dropped when `max-concurrent` is full. Watch `starts_skipped_at_capacity` in the client progress log or dashboard and use Prometheus metrics for traffic totals. `make benchmark` measures local CPU and allocation costs; it is not a network-capacity test.
 
 ## Contributing
 

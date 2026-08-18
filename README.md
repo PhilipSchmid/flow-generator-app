@@ -13,6 +13,7 @@ Flow Generator runs a TCP/UDP echo server and a traffic client for testing Kuber
 - **TCP and UDP**: Generate either protocol or mix both
 - **Configuration**: Use command-line flags, `FLOW_GENERATOR_` environment variables, or optional config files
 - **Observability**: Prometheus metrics, server health checks, and optional OpenTelemetry tracing
+- **Terminal dashboard**: Inspect a running client or server without enabling verbose logs
 - **Bounded concurrency**: Pace flow starts evenly and cap active flows
 - **Kubernetes manifests**: Run constant or random traffic patterns
 - **Development tools**: Live reload, tests, benchmarks, and CI workflows
@@ -68,6 +69,7 @@ Server options for `echo-server` and `ghcr.io/philipschmid/echo-server:latest`:
 | `--log-level` | `FLOW_GENERATOR_LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
 | `--log-format` | `FLOW_GENERATOR_LOG_FORMAT` | `human` | Log format (human, json) |
 | `--metrics-port` | `FLOW_GENERATOR_METRICS_PORT` | `9090` | Prometheus metrics port |
+| `--status-port` | `FLOW_GENERATOR_STATUS_PORT` | `9190` | Loopback dashboard status port (`0` disables it) |
 | `--health-port` | `FLOW_GENERATOR_HEALTH_PORT` | `8082` | Health check server port |
 | `--tracing-enabled` | `FLOW_GENERATOR_TRACING_ENABLED` | `false` | Enable OpenTelemetry tracing |
 | `--jaeger-endpoint` | `FLOW_GENERATOR_JAEGER_ENDPOINT` | `http://localhost:4317` | OTLP/gRPC collector URL (`http` is plaintext; `https` uses TLS) |
@@ -84,6 +86,7 @@ Client options for `flow-generator` and `ghcr.io/philipschmid/flow-generator:lat
 | `--log-level` | `FLOW_GENERATOR_LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
 | `--log-format` | `FLOW_GENERATOR_LOG_FORMAT` | `human` | Log format (human, json) |
 | `--metrics-port` | `FLOW_GENERATOR_METRICS_PORT` | `9091` | Prometheus metrics port |
+| `--status-port` | `FLOW_GENERATOR_STATUS_PORT` | `9191` | Loopback dashboard status port (`0` disables it) |
 | `--tracing-enabled` | `FLOW_GENERATOR_TRACING_ENABLED` | `false` | Enable OpenTelemetry tracing |
 | `--jaeger-endpoint` | `FLOW_GENERATOR_JAEGER_ENDPOINT` | `http://localhost:4317` | OTLP/gRPC collector URL (`http` is plaintext; `https` uses TLS) |
 | `--server` | `FLOW_GENERATOR_SERVER` | `localhost` | Target server address |
@@ -164,6 +167,32 @@ In constant mode, each flow lasts `max-concurrent / rate` seconds. The example t
 
 ## Monitoring
 
+### Terminal Dashboard
+
+Both container images include `/dashboard`. It reads a loopback-only status endpoint from the running client or server, so it works in the existing scratch images without a shell:
+
+```bash
+# Kubernetes
+kubectl exec -it deploy/echo-server -- /dashboard
+kubectl exec -it deploy/flow-generator -- /dashboard
+
+# Docker
+docker exec -it echo-server /dashboard
+docker exec -it flow-generator /dashboard
+```
+
+The dashboard shows configured and achieved flow rates, active flows, capacity-limited starts, failures, payload throughput, protocol and port activity, and sampled echo latency. It keeps 1-, 5-, and 15-minute averages visible; use left/right to select the window for charts and p50/p90/p95/p99 summaries. Press `q` to leave; the monitored process keeps running.
+
+Latency sampling is capped at roughly 1,000 flows per second. TCP measures its echo; UDP measures the first successful echo in a sampled flow rather than timing every packet. The dashboard reports p50, p90, p95, and p99 when enough samples exist.
+
+The dashboard auto-detects the default local endpoints. For a custom status port, pass the full loopback URL:
+
+```bash
+/dashboard --endpoint http://127.0.0.1:9291
+```
+
+Use `--color=auto`, `always`, or `never`; `auto` also honors `NO_COLOR`. The light/dark palette distinguishes TCP, UDP, transmit, receive, healthy, capacity-limited, and failed states without relying on color alone. The status listener accepts only local GET requests, exposes no credentials, and can be disabled with `--status-port=0`.
+
 ### Health Checks
 
 The echo server exposes health endpoints on port 8082 by default. The client does not run a health server.
@@ -218,6 +247,8 @@ Both binaries use the private packages under `internal/`:
   - **handlers/**: Protocol-specific request handlers
   - **server/**: Server implementations with manager pattern
   - **metrics/**: Prometheus metrics collection
+  - **status/**: Loopback dashboard snapshots and sampled latency
+  - **dashboard/**: Terminal rendering, history, and status client
   - **health/**: Health check server for liveness/readiness probes
   - **logging/**: Structured logging utilities
   - **tracing/**: OpenTelemetry integration
