@@ -154,7 +154,7 @@ For predictable traffic patterns:
   --constant_flows=true
 ```
 
-Starts are paced evenly at `1 / rate` intervals; there is no configurable ramp-up period. If `max_concurrent` is already occupied, that scheduled start is dropped rather than queued. TCP sends and receives one echo per flow, while UDP performs up to one echo exchange per 100 ms per active flow.
+Starts are paced evenly at `1 / rate` intervals; there is no configurable ramp-up period. If `max_concurrent` is already occupied, that scheduled start is dropped rather than queued. TCP sends and receives one echo per flow, while UDP performs up to one echo exchange per 100 ms per active flow. `rate` is not a packet or bandwidth limit, so high UDP concurrency and payload sizes can saturate a link.
 
 In constant mode, each flow lasts `max_concurrent / rate` seconds. The example therefore targets about 5 starts per second and about 50 concurrent flows after warm-up, but ticker timing, connection overhead, errors, and dropped starts make the rate and concurrency approximate rather than exact.
 
