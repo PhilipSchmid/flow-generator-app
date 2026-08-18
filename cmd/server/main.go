@@ -22,6 +22,8 @@ import (
 	"github.com/spf13/pflag"
 )
 
+const progressLogInterval = 30 * time.Second
+
 // parsePorts parses a comma-separated string of ports into a slice of integers
 func parsePorts(portsStr string) []int {
 	if portsStr == "" {
@@ -141,8 +143,20 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	// Wait for termination signal
-	sig := <-sigChan
+	progressTicker := time.NewTicker(progressLogInterval)
+	defer progressTicker.Stop()
+
+	// Wait for termination while emitting a low-frequency aggregate heartbeat.
+	var sig os.Signal
+	for sig == nil {
+		select {
+		case sig = <-sigChan:
+		case <-progressTicker.C:
+			logging.Logger.Infow("Echo server progress",
+				"requests_received", mc.TotalRequestsReceived(),
+			)
+		}
+	}
 	logging.Logger.Infof("Received signal: %v. Shutting down...", sig)
 
 	// Mark service as not ready during shutdown

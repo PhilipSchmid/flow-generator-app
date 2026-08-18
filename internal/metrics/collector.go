@@ -163,6 +163,11 @@ func (mc *MetricsCollector) IncUDPPacketsReceived() {
 	mc.UDPPacketsReceived.Inc()
 }
 
+// TotalRequestsReceived returns the process-local receive count.
+func (mc *MetricsCollector) TotalRequestsReceived() uint64 {
+	return atomic.LoadUint64(&mc.totalRequestsReceived)
+}
+
 func (mc *MetricsCollector) SetActiveTCPConnections(n int) {
 	mc.ActiveTCPConnections.Set(float64(n))
 }

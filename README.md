@@ -185,6 +185,8 @@ curl http://localhost:9091/metrics # client
 
 Metrics and health listeners bind to all interfaces and do not authenticate requests. Restrict access with container, host, or cluster network policy.
 
+At info level, both binaries emit one aggregate progress heartbeat every 30 seconds. Per-flow diagnostics remain at debug level and repeated messages are sampled.
+
 Key metrics include:
 - `active_tcp_connections`: Current active TCP connections
 - `udp_packets_received_total`: Total UDP packets received

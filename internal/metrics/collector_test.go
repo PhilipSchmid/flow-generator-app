@@ -112,6 +112,13 @@ func TestIncRequestsSent(t *testing.T) {
 	assert.Equal(t, uint64(2), data["udp"]["9000"])
 }
 
+func TestMetricsCollectorTotals(t *testing.T) {
+	mc := testMetricsCollector()
+	mc.IncRequestsReceived("tcp", "8080")
+
+	assert.Equal(t, uint64(1), mc.TotalRequestsReceived())
+}
+
 func TestAddBytesReceived(t *testing.T) {
 	mc := testMetricsCollector()
 
