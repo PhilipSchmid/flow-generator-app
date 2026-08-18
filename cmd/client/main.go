@@ -292,6 +292,17 @@ func main() {
 	}()
 
 	mc = metrics.NewMetricsCollector()
+	metricsServer, err := metrics.StartMetricsServer(cfg.MetricsPort)
+	if err != nil {
+		logging.Logger.Fatalf("Failed to start metrics server: %v", err)
+	}
+	defer func() {
+		ctx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		if err := metricsServer.Stop(ctx); err != nil {
+			logging.Logger.Errorf("Failed to stop metrics server: %v", err)
+		}
+	}()
 
 	// Handle termination signals
 	sigChan := make(chan os.Signal, 1)
