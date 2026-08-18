@@ -116,6 +116,14 @@ func applyFlowDeadline(ctx context.Context, conn net.Conn) func() {
 	return func() { _ = stop() }
 }
 
+func expectedFlowEnd(ctx context.Context, err error) bool {
+	if ctx.Err() != nil {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
 // drainStragglerReply gives conn a short, bounded grace window to receive a
 // reply that was already in flight when the caller's read loop broke out
 // (deadline hit or read error). Closing a TCP socket while data the peer
@@ -166,7 +174,7 @@ func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics
 	if pp.Protocol == "tcp" {
 		conn, err := dialer.DialContext(flowCtx, "tcp", pp.address)
 		if err != nil {
-			if flowCtx.Err() == nil {
+			if !expectedFlowEnd(flowCtx, err) {
 				logging.Logger.Warnf("Failed to connect to %s:%d (TCP): %v", cfg.Server, pp.Port, err)
 			}
 			return
@@ -180,7 +188,7 @@ func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics
 
 		nSent, err := writeFull(conn, payload)
 		if err != nil {
-			if flowCtx.Err() == nil {
+			if !expectedFlowEnd(flowCtx, err) {
 				logging.Logger.Warnf("Failed to write to TCP connection: %v", err)
 			}
 			return
@@ -195,7 +203,7 @@ func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics
 		for totalReceived < payloadSize {
 			n, err := conn.Read(buf)
 			if err != nil {
-				if flowCtx.Err() == nil {
+				if !expectedFlowEnd(flowCtx, err) {
 					logging.Logger.Warnf("Failed to read full TCP response: %v", err)
 				}
 				break
@@ -223,7 +231,7 @@ func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics
 	} else { // udp
 		conn, err := dialer.DialContext(flowCtx, "udp", pp.address)
 		if err != nil {
-			if flowCtx.Err() == nil {
+			if !expectedFlowEnd(flowCtx, err) {
 				logging.Logger.Warnf("Failed to connect to %s:%d (UDP): %v", cfg.Server, pp.Port, err)
 			}
 			return
@@ -249,7 +257,7 @@ func generateFlow(mainCtx context.Context, cfg *config.ClientConfig, mc *metrics
 				err = io.ErrShortWrite
 			}
 			if err != nil {
-				if flowCtx.Err() != nil {
+				if expectedFlowEnd(flowCtx, err) {
 					return
 				}
 				logging.Logger.Warnf("Failed to write to UDP connection: %v", err)
