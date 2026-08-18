@@ -12,7 +12,14 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-s -w \
     -X github.com/PhilipSchmid/flow-generator-app/internal/version.BuildDate=${BUILD_DATE} \
     -X github.com/PhilipSchmid/flow-generator-app/internal/version.GitCommit=${GIT_COMMIT}" \
     -o echo-server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-s -w \
+    -X github.com/PhilipSchmid/flow-generator-app/internal/version.Version=${VERSION} \
+    -X github.com/PhilipSchmid/flow-generator-app/internal/version.BuildDate=${BUILD_DATE} \
+    -X github.com/PhilipSchmid/flow-generator-app/internal/version.GitCommit=${GIT_COMMIT}" \
+    -o dashboard ./cmd/dashboard
 FROM scratch
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder /app/echo-server /
+COPY --from=builder /app/dashboard /
+USER 65532:65532
 ENTRYPOINT ["/echo-server"]

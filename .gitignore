@@ -24,6 +24,8 @@ go.work.sum
 # env file
 .env
 
-echo-server
-flow-generator
+/echo-server
+/flow-generator
+/dashboard
+/bin/
 coverage/*
