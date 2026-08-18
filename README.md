@@ -229,7 +229,7 @@ The repository includes:
 
 - **Live reload**: run `make install-tools`, then use `make dev-server` or `make dev-client`
 - **Cross-platform builds**: `make build-all`
-- **Testing**: Unit tests, benchmarks, and integration tests
+- **Testing**: Unit tests, a client/server parameter matrix, benchmarks, and integration tests
 - **CI/CD**: Automated testing, security scanning, and multi-platform Docker builds
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for detailed development instructions.
