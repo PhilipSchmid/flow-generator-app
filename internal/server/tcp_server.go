@@ -16,6 +16,9 @@ type TCPServer struct {
 	listener net.Listener
 	handler  *handlers.TCPHandler
 	wg       sync.WaitGroup
+	connsMu  sync.Mutex
+	conns    map[net.Conn]struct{}
+	stopping bool
 	ctx      context.Context
 	cancel   context.CancelFunc
 }
@@ -26,6 +29,7 @@ func NewTCPServer(port int, handler *handlers.TCPHandler) *TCPServer {
 	return &TCPServer{
 		port:    port,
 		handler: handler,
+		conns:   make(map[net.Conn]struct{}),
 		ctx:     ctx,
 		cancel:  cancel,
 	}
@@ -56,6 +60,12 @@ func (s *TCPServer) Stop() error {
 			logging.Logger.Warnf("Error closing TCP listener on port %d: %v", s.port, err)
 		}
 	}
+	s.connsMu.Lock()
+	s.stopping = true
+	for conn := range s.conns {
+		_ = conn.Close()
+	}
+	s.connsMu.Unlock()
 	s.wg.Wait()
 	logging.Logger.Infof("TCP server on port %d stopped", s.port)
 	return nil
@@ -77,9 +87,22 @@ func (s *TCPServer) acceptConnections() {
 			}
 		}
 
+		s.connsMu.Lock()
+		if s.stopping {
+			s.connsMu.Unlock()
+			_ = conn.Close()
+			return
+		}
+		s.conns[conn] = struct{}{}
+		s.connsMu.Unlock()
 		s.wg.Add(1)
 		go func() {
-			defer s.wg.Done()
+			defer func() {
+				s.connsMu.Lock()
+				delete(s.conns, conn)
+				s.connsMu.Unlock()
+				s.wg.Done()
+			}()
 			s.handler.Handle(conn)
 		}()
 	}

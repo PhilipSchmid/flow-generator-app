@@ -185,6 +185,31 @@ func TestTCPServerConcurrentConnections(t *testing.T) {
 	assert.Equal(t, numConnections, successCount)
 }
 
+func TestTCPServerStopClosesIdleConnections(t *testing.T) {
+	mc := metrics.NewMetricsCollector()
+	server := NewTCPServer(0, handlers.NewTCPHandler(mc))
+	require.NoError(t, server.Start())
+
+	port := server.listener.Addr().(*net.TCPAddr).Port
+	conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+	require.Eventually(t, func() bool {
+		server.connsMu.Lock()
+		defer server.connsMu.Unlock()
+		return len(server.conns) == 1
+	}, time.Second, 10*time.Millisecond)
+
+	stopped := make(chan error, 1)
+	go func() { stopped <- server.Stop() }()
+	select {
+	case err := <-stopped:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("server stop blocked on an idle client connection")
+	}
+}
+
 func BenchmarkTCPServerConnection(b *testing.B) {
 	mc := metrics.NewMetricsCollector()
 	handler := handlers.NewTCPHandler(mc)
