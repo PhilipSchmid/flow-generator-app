@@ -191,6 +191,15 @@ func (c *ServerConfig) Validate() error {
 			return err
 		}
 	}
+	if c.MetricsPort != "" && c.MetricsPort == c.HealthPort {
+		return fmt.Errorf("metrics_port and health_port must be different")
+	}
+	if portListContains(c.TCPPortsServer, c.MetricsPort) {
+		return fmt.Errorf("metrics_port conflicts with tcp_ports_server")
+	}
+	if portListContains(c.TCPPortsServer, c.HealthPort) {
+		return fmt.Errorf("health_port conflicts with tcp_ports_server")
+	}
 
 	return nil
 }
@@ -348,6 +357,18 @@ func validatePortList(value, name string) error {
 		seen[port] = struct{}{}
 	}
 	return nil
+}
+
+func portListContains(value, target string) bool {
+	if value == "" || target == "" {
+		return false
+	}
+	for _, rawPort := range strings.Split(value, ",") {
+		if strings.TrimSpace(rawPort) == target {
+			return true
+		}
+	}
+	return false
 }
 
 // setServerDefaults sets default values for server configuration
