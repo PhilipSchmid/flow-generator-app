@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"sync"
 
 	"github.com/PhilipSchmid/flow-generator-app/internal/logging"
 	"github.com/PhilipSchmid/flow-generator-app/internal/metrics"
@@ -12,6 +13,12 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 )
+
+const tcpReadBufferSize = 1024
+
+var tcpReadBufferPool = sync.Pool{
+	New: func() any { return new([tcpReadBufferSize]byte) },
+}
 
 // TCPHandler handles TCP connections
 type TCPHandler struct {
@@ -51,7 +58,9 @@ func (h *TCPHandler) Handle(conn net.Conn) {
 		logging.Logger.Debugf("Accepted TCP connection on %s from %s", conn.LocalAddr(), conn.RemoteAddr())
 	}
 
-	buf := make([]byte, 1024)
+	readBuffer := tcpReadBufferPool.Get().(*[tcpReadBufferSize]byte)
+	defer tcpReadBufferPool.Put(readBuffer)
+	buf := readBuffer[:]
 	for {
 		n, err := conn.Read(buf)
 		if err != nil {
