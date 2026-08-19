@@ -70,6 +70,24 @@ func TestCapacityLimitedDashboardExplainsMissingStarts(t *testing.T) {
 	assert.NotContains(t, rendered, "AUTO RANGE")
 }
 
+func TestSignedDashboardCountsClampAtZero(t *testing.T) {
+	started := time.Now().UTC().Add(-time.Minute)
+	client := dashboardSnapshot(started, started.Add(time.Second), 100, 1000, 0)
+	client.Configuration.MaxConcurrent = -1
+	colors := newPalette(true, false)
+
+	clientPanel := (Model{}).clientLoadPanel(client, distribution{}, distribution{Current: -1}, colors, 120)
+	assert.Equal(t, "0", formatIntCount(-1))
+	assert.Contains(t, clientPanel, "0 / 0")
+	assert.Contains(t, clientPanel, "0 headroom")
+
+	server := serverDashboardSnapshot(started, started.Add(time.Second), 100)
+	server.Traffic.ActiveTCPConnections = -1
+	serverPanel := (Model{}).serverSummaryPanel(server, distribution{}, colors, 120)
+	assert.Equal(t, "0", formatInt64Count(-1))
+	assert.Contains(t, serverPanel, "TCP connections")
+}
+
 func TestPayloadIORemainsCombinedWhileBalanced(t *testing.T) {
 	started := time.Now().UTC().Add(-time.Minute)
 	first := dashboardSnapshot(started, started, 0, 0, 0)
