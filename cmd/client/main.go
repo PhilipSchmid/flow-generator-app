@@ -590,37 +590,41 @@ func main() {
 	for i, pp := range availablePorts {
 		statusPorts[i] = statusapi.PortFlowSnapshot{Protocol: pp.Protocol, Port: pp.Port}
 	}
-	statusTracker := statusapi.NewClientTracker(cfg.Rate, statusPorts)
-	statusServer, err := statusapi.Start(cfg.StatusPort, func() statusapi.Snapshot {
-		client := statusTracker.Snapshot()
-		state := "running"
-		if client.LimitReached {
-			state = "draining"
+	var statusTracker *statusapi.ClientTracker
+	var statusServer *statusapi.Server
+	if cfg.StatusPort != "0" {
+		statusTracker = statusapi.NewClientTracker(statusPorts)
+		statusServer, err = statusapi.Start(cfg.StatusPort, func() statusapi.Snapshot {
+			client := statusTracker.Snapshot()
+			state := "running"
+			if client.LimitReached {
+				state = "draining"
+			}
+			return statusapi.Snapshot{
+				SchemaVersion: statusapi.SchemaVersion,
+				Role:          "client",
+				Version:       version.Short(),
+				SampledAt:     time.Now().UTC(),
+				StartedAt:     startedAt,
+				State:         state,
+				Configuration: statusapi.Configuration{
+					Target: cfg.Server, Protocol: cfg.Protocol,
+					TCPPorts: tcpPorts, UDPPorts: udpPorts,
+					Rate: cfg.Rate, MaxConcurrent: cfg.MaxConcurrent,
+					MinDuration: cfg.MinDuration, MaxDuration: cfg.MaxDuration,
+					ConstantFlows: cfg.ConstantFlows, FlowTimeout: cfg.FlowTimeout,
+					FlowCount: cfg.FlowCount, PayloadSize: cfg.PayloadSize,
+					MinPayloadSize: cfg.MinPayloadSize, MaxPayloadSize: cfg.MaxPayloadSize,
+					MTU: cfg.MTU, MSS: cfg.MSS, MetricsPort: cfg.MetricsPort,
+					TracingEnabled: cfg.TracingEnabled,
+				},
+				Traffic: mc.Snapshot(),
+				Client:  &client,
+			}
+		})
+		if err != nil {
+			logging.Logger.Fatalf("Failed to start local dashboard status: %v", err)
 		}
-		return statusapi.Snapshot{
-			SchemaVersion: statusapi.SchemaVersion,
-			Role:          "client",
-			Version:       version.Short(),
-			SampledAt:     time.Now().UTC(),
-			StartedAt:     startedAt,
-			State:         state,
-			Configuration: statusapi.Configuration{
-				Target: cfg.Server, Protocol: cfg.Protocol,
-				TCPPorts: tcpPorts, UDPPorts: udpPorts,
-				Rate: cfg.Rate, MaxConcurrent: cfg.MaxConcurrent,
-				MinDuration: cfg.MinDuration, MaxDuration: cfg.MaxDuration,
-				ConstantFlows: cfg.ConstantFlows, FlowTimeout: cfg.FlowTimeout,
-				FlowCount: cfg.FlowCount, PayloadSize: cfg.PayloadSize,
-				MinPayloadSize: cfg.MinPayloadSize, MaxPayloadSize: cfg.MaxPayloadSize,
-				MTU: cfg.MTU, MSS: cfg.MSS, MetricsPort: cfg.MetricsPort,
-				TracingEnabled: cfg.TracingEnabled,
-			},
-			Traffic: mc.Snapshot(),
-			Client:  &client,
-		}
-	})
-	if err != nil {
-		logging.Logger.Fatalf("Failed to start local dashboard status: %v", err)
 	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -655,20 +659,25 @@ func main() {
 	stats := runFlowSchedulerTracked(mainCtx, cfg.Rate, cfg.MaxConcurrent, cfg.FlowCount, func(ctx context.Context) {
 		// #nosec G404 - math/rand is sufficient for flow scheduling randomization
 		pp := availablePorts[rand.IntN(len(availablePorts))]
-		sampleLatency := statusTracker.FlowStarted(pp.statusIndex)
+		sampleLatency := false
+		if statusTracker != nil {
+			sampleLatency = statusTracker.FlowStarted(pp.statusIndex)
+		}
 		duration := constantDuration
 		if !cfg.ConstantFlows {
 			// #nosec G404 - math/rand is sufficient for flow scheduling randomization
 			duration = cfg.MinDuration + rand.Float64()*(cfg.MaxDuration-cfg.MinDuration)
 		}
 		outcome := generateFlowObserved(ctx, cfg, mc, pp, duration, flowObserver{tracker: statusTracker, sampleLatency: sampleLatency})
-		switch outcome {
-		case flowCompleted:
-			statusTracker.FlowCompleted()
-		case flowCanceled:
-			statusTracker.FlowCanceled()
-		case flowFailed:
-			statusTracker.FlowFailed(pp.statusIndex)
+		if statusTracker != nil {
+			switch outcome {
+			case flowCompleted:
+				statusTracker.FlowCompleted()
+			case flowCanceled:
+				statusTracker.FlowCanceled()
+			case flowFailed:
+				statusTracker.FlowFailed(pp.statusIndex)
+			}
 		}
 	}, statusTracker)
 

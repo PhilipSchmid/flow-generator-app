@@ -15,8 +15,10 @@ import (
 const (
 	// SchemaVersion changes only when the status JSON contract is incompatible.
 	SchemaVersion       = 1
-	latencyBuckets      = 252
+	LatencyBucketCount  = 252
+	latencyBuckets      = LatencyBucketCount
 	maxSamplesPerSecond = 1000
+	latencySamplePeriod = time.Second / maxSamplesPerSecond
 )
 
 // Configuration contains non-secret settings useful while diagnosing traffic.
@@ -121,8 +123,9 @@ func (c *errorCounters) snapshot() ErrorCounts {
 }
 
 type latencyHistogram struct {
-	sumNanos atomic.Uint64
-	buckets  [latencyBuckets]atomic.Uint64
+	mu       sync.Mutex
+	sumNanos uint64
+	buckets  [latencyBuckets]uint64
 }
 
 func (h *latencyHistogram) observe(duration time.Duration) {
@@ -133,18 +136,22 @@ func (h *latencyHistogram) observe(duration time.Duration) {
 	if nanos == 0 {
 		nanos = 1
 	}
-	h.sumNanos.Add(nanos)
-	h.buckets[latencyBucket(nanos)].Add(1)
+	h.mu.Lock()
+	h.sumNanos += nanos
+	h.buckets[latencyBucket(nanos)]++
+	h.mu.Unlock()
 }
 
 func (h *latencyHistogram) snapshot() LatencySnapshot {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	buckets := make([]uint64, latencyBuckets)
 	var count uint64
 	for i := range h.buckets {
-		buckets[i] = h.buckets[i].Load()
+		buckets[i] = h.buckets[i]
 		count += buckets[i]
 	}
-	return LatencySnapshot{Count: count, SumNanos: h.sumNanos.Load(), Buckets: buckets}
+	return LatencySnapshot{Count: count, SumNanos: h.sumNanos, Buckets: buckets}
 }
 
 func latencyBucket(nanos uint64) int {
@@ -205,19 +212,12 @@ type ClientTracker struct {
 	ports        []portFlowCounter
 	tcpLatency   latencyHistogram
 	udpLatency   latencyHistogram
-	sampleEvery  uint64
+	nextSampleAt atomic.Int64
 }
 
 // NewClientTracker preallocates counters for configured protocol/port pairs.
-func NewClientTracker(rate float64, ports []PortFlowSnapshot) *ClientTracker {
-	every := uint64(1)
-	if rate > maxSamplesPerSecond {
-		every = uint64(rate / maxSamplesPerSecond)
-		if float64(every*maxSamplesPerSecond) < rate {
-			every++
-		}
-	}
-	t := &ClientTracker{sampleEvery: every, ports: make([]portFlowCounter, len(ports))}
+func NewClientTracker(ports []PortFlowSnapshot) *ClientTracker {
+	t := &ClientTracker{ports: make([]portFlowCounter, len(ports))}
 	for i, port := range ports {
 		t.ports[i].protocol = port.Protocol
 		t.ports[i].port = port.Port
@@ -227,12 +227,20 @@ func NewClientTracker(rate float64, ports []PortFlowSnapshot) *ClientTracker {
 
 // FlowStarted records one launched flow and returns whether to sample its RTT.
 func (t *ClientTracker) FlowStarted(portIndex int) bool {
-	started := t.started.Add(1)
+	t.started.Add(1)
 	t.active.Add(1)
 	if portIndex >= 0 && portIndex < len(t.ports) {
 		t.ports[portIndex].started.Add(1)
 	}
-	return t.sampleEvery == 1 || started%t.sampleEvery == 0
+	return t.sampleLatencyAt(time.Now().UnixNano())
+}
+
+func (t *ClientTracker) sampleLatencyAt(now int64) bool {
+	next := t.nextSampleAt.Load()
+	if now < next {
+		return false
+	}
+	return t.nextSampleAt.CompareAndSwap(next, now+int64(latencySamplePeriod))
 }
 
 func (t *ClientTracker) FlowCompleted() { t.active.Add(-1); t.completed.Add(1) }
