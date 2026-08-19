@@ -3,7 +3,10 @@ package logging
 import (
 	"io"
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
@@ -137,6 +140,59 @@ func TestConcurrentLogging(t *testing.T) {
 	}
 
 	assert.True(t, true)
+}
+
+func TestRateLimiterBoundsBurstAndReportsSuppression(t *testing.T) {
+	limiter := NewRateLimiter(time.Second)
+	now := time.Unix(100, 0)
+
+	suppressed, allowed := limiter.allowAt(now)
+	assert.True(t, allowed)
+	assert.Zero(t, suppressed)
+	for range 999 {
+		_, allowed = limiter.allowAt(now.Add(500 * time.Millisecond))
+		assert.False(t, allowed)
+	}
+
+	suppressed, allowed = limiter.allowAt(now.Add(time.Second))
+	assert.True(t, allowed)
+	assert.Equal(t, uint64(999), suppressed)
+}
+
+func TestRateLimiterAllowsOneConcurrentEvent(t *testing.T) {
+	limiter := NewRateLimiter(time.Second)
+	now := time.Unix(100, 0)
+	var allowed atomic.Uint64
+	var group sync.WaitGroup
+	for range 100 {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			if _, ok := limiter.allowAt(now); ok {
+				allowed.Add(1)
+			}
+		}()
+	}
+	group.Wait()
+	assert.Equal(t, uint64(1), allowed.Load())
+
+	suppressed, ok := limiter.allowAt(now.Add(time.Second))
+	assert.True(t, ok)
+	assert.Equal(t, uint64(99), suppressed)
+}
+
+func TestRateLimiterIgnoresChangingFields(t *testing.T) {
+	core, recorded := observer.New(zapcore.WarnLevel)
+	oldLogger := Logger
+	Logger = zap.New(core).Sugar()
+	t.Cleanup(func() { Logger = oldLogger })
+	limiter := NewRateLimiter(time.Hour)
+
+	for i := range 1000 {
+		limiter.Warnw("UDP read failed", "source_port", i)
+	}
+
+	assert.Len(t, recorded.All(), 1)
 }
 
 func BenchmarkLogging(b *testing.B) {
