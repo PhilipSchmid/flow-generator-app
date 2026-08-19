@@ -689,18 +689,20 @@ func (m Model) helpModal(colors palette, width int) string {
 	primaryStyle := styled(colors.primary).Background(colors.surface)
 	mutedStyle := styled(colors.muted).Background(colors.surface)
 	textStyle := styled(colors.text).Background(colors.surface)
+	surfaceStyle := lipgloss.NewStyle().Background(colors.surface)
+	space := func(width int) string {
+		return surfaceStyle.Render(strings.Repeat(" ", maxInt(width, 0)))
+	}
 	row := func(keys, action string) string {
 		key := primaryStyle.Bold(true).Render(fmt.Sprintf("%-*s", keyWidth, keys))
-		return key + "  " + textStyle.Render(action)
+		return key + space(2) + textStyle.Render(action)
 	}
-	header := joinSides(
-		primaryStyle.Bold(true).Render("DASHBOARD HELP"),
-		mutedStyle.Render("Esc / ? / F1  close"),
-		inner,
-	)
+	headerLeft := primaryStyle.Bold(true).Render("DASHBOARD HELP")
+	headerRight := mutedStyle.Render("Esc / ? / F1  close")
+	header := headerLeft + space(inner-lipgloss.Width(headerLeft)-lipgloss.Width(headerRight)) + headerRight
 	content := strings.Join([]string{
 		header,
-		mutedStyle.Bold(true).Render("KEYS") + strings.Repeat(" ", keyWidth-4+2) + mutedStyle.Bold(true).Render("ACTION"),
+		mutedStyle.Bold(true).Render("KEYS") + space(keyWidth-4+2) + mutedStyle.Bold(true).Render("ACTION"),
 		row("← / h", "Previous time range"),
 		row("→ / l / Tab", "Next time range"),
 		row("1 / 5 / 0", "Select 1m / 5m / 15m"),
