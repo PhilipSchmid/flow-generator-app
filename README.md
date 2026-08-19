@@ -37,7 +37,7 @@ docker run -p 9091:9091 ghcr.io/philipschmid/flow-generator:latest --server host
 git clone https://github.com/PhilipSchmid/flow-generator-app.git
 cd flow-generator-app
 
-# Build binaries
+# Build the server, client, and dashboard
 make build
 
 # Run quick test
@@ -169,9 +169,12 @@ In constant mode, each flow lasts `max-concurrent / rate` seconds. The example t
 
 ### Terminal Dashboard
 
-Both container images include `/dashboard`. It reads a loopback-only status endpoint from the running client or server, so it works in the existing scratch images without a shell:
+`make build` creates `bin/dashboard`, and both container images include `/dashboard`. It reads a loopback-only status endpoint from the running client or server, so it works in the existing scratch images without a shell:
 
 ```bash
+# Local source build
+./bin/dashboard
+
 # Kubernetes
 kubectl exec -it deploy/echo-server -- /dashboard
 kubectl exec -it deploy/flow-generator -- /dashboard
@@ -181,9 +184,9 @@ docker exec -it echo-server /dashboard
 docker exec -it flow-generator /dashboard
 ```
 
-The heading shows the process role, version, uptime, sample age, health, and active configuration. The client view adds target attainment, concurrency headroom, flow outcomes, payload throughput, protocol and port activity, and sampled echo latency. The server view shows request activity, active TCP connections, and unique active TCP client IPs. UDP is connectionless, so UDP senders are represented by packet and port activity instead of a connected-client count.
+The heading shows the process role, version, uptime, sample age, health, and active configuration. The client view adds scheduled, started, and capacity-skipped flow rates, concurrency headroom, flow outcomes, payload throughput, protocol and port activity, and sampled echo latency. The server view shows request activity, active TCP connections, and unique active TCP client IPs. UDP is connectionless, so UDP senders are represented by packet and port activity instead of a connected-client count.
 
-The dashboard keeps 1-, 5-, and 15-minute averages visible. Charts label the selected time window and auto-scaled vertical range; the dashed flow-rate line marks the configured target, and the table provides exact percentiles. Monitor-style shortcuts are also shown in the footer:
+The dashboard keeps 1-, 5-, and 15-minute averages visible. Charts use the selected time window and an auto-scaled Y-axis. The flow chart labels the configured target and marks it with a dashed line; the table provides exact percentiles. Monitor-style shortcuts are also shown in the footer:
 
 | Key | Action |
 |-----|--------|
