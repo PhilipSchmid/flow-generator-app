@@ -49,7 +49,10 @@ var payloadCache []byte
 
 const tcpReadBufferSize = 1024
 
-const progressLogInterval = 30 * time.Second
+const (
+	progressLogInterval       = 30 * time.Second
+	networkFailureLogInterval = 30 * time.Second
+)
 
 var tcpReadBufferPool = sync.Pool{
 	New: func() any { return new([tcpReadBufferSize]byte) },
@@ -60,11 +63,11 @@ var flowLogs = struct {
 	udpDial, udpWrite, udpRead, udpTimeout  *logging.RateLimiter
 	udpMismatch, udpMTU                     *logging.RateLimiter
 }{
-	tcpDial: logging.NewRateLimiter(time.Second), tcpWrite: logging.NewRateLimiter(time.Second),
-	tcpRead: logging.NewRateLimiter(time.Second), tcpMismatch: logging.NewRateLimiter(time.Second),
-	udpDial: logging.NewRateLimiter(time.Second), udpWrite: logging.NewRateLimiter(time.Second),
-	udpRead: logging.NewRateLimiter(time.Second), udpTimeout: logging.NewRateLimiter(time.Second),
-	udpMismatch: logging.NewRateLimiter(time.Second), udpMTU: logging.NewRateLimiter(time.Second),
+	tcpDial: logging.NewRateLimiter(networkFailureLogInterval), tcpWrite: logging.NewRateLimiter(networkFailureLogInterval),
+	tcpRead: logging.NewRateLimiter(networkFailureLogInterval), tcpMismatch: logging.NewRateLimiter(networkFailureLogInterval),
+	udpDial: logging.NewRateLimiter(networkFailureLogInterval), udpWrite: logging.NewRateLimiter(networkFailureLogInterval),
+	udpRead: logging.NewRateLimiter(networkFailureLogInterval), udpTimeout: logging.NewRateLimiter(networkFailureLogInterval),
+	udpMismatch: logging.NewRateLimiter(networkFailureLogInterval), udpMTU: logging.NewRateLimiter(networkFailureLogInterval),
 }
 
 // tcpCloseGracePeriod bounds how long we wait to drain a reply that was

@@ -12,7 +12,9 @@ import (
 	statusmetrics "github.com/PhilipSchmid/flow-generator-app/internal/status"
 )
 
-var tcpAcceptLogs = logging.NewRateLimiter(time.Second)
+const networkFailureLogInterval = 30 * time.Second
+
+var tcpAcceptLogs = logging.NewRateLimiter(networkFailureLogInterval)
 
 // TCPServer represents a TCP server
 type TCPServer struct {

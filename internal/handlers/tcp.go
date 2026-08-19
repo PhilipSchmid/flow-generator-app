@@ -16,7 +16,10 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
-const tcpReadBufferSize = 1024
+const (
+	tcpReadBufferSize         = 1024
+	networkFailureLogInterval = 30 * time.Second
+)
 
 var tcpReadBufferPool = sync.Pool{
 	New: func() any { return new([tcpReadBufferSize]byte) },
@@ -26,8 +29,8 @@ var tcpFailureLogs = struct {
 	read  *logging.RateLimiter
 	write *logging.RateLimiter
 }{
-	read:  logging.NewRateLimiter(time.Second),
-	write: logging.NewRateLimiter(time.Second),
+	read:  logging.NewRateLimiter(networkFailureLogInterval),
+	write: logging.NewRateLimiter(networkFailureLogInterval),
 }
 
 // TCPHandler handles TCP connections
