@@ -96,7 +96,7 @@ The smoke test runs for 10 seconds and requires ports 8080, 8081, 8082, 9000, 90
 # Current platform
 make build
 
-# One binary
+# Rebuild only one binary during development
 make build-server
 make build-client
 make build-dashboard
