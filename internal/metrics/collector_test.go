@@ -233,15 +233,18 @@ func TestLogMetricsHuman(t *testing.T) {
 	output, _ := io.ReadAll(r)
 	outputStr := string(output)
 
-	assert.Contains(t, outputStr, "Total Metrics:")
-	assert.Contains(t, outputStr, "Total Requests Received")
+	assert.Contains(t, outputStr, "RUN SUMMARY")
+	assert.Contains(t, outputStr, "REQUESTS RX")
 	assert.Contains(t, outputStr, "100")
-	assert.Contains(t, outputStr, "Total Requests Sent")
+	assert.Contains(t, outputStr, "REQUESTS TX")
 	assert.Contains(t, outputStr, "200")
-	assert.Contains(t, outputStr, "Requests Received Per-protocol/port:")
-	assert.Contains(t, outputStr, "Requests Sent Per-protocol/port:")
-	assert.Contains(t, outputStr, "Bytes Received Per-protocol/port:")
-	assert.Contains(t, outputStr, "Bytes Sent Per-protocol/port:")
+	assert.Contains(t, outputStr, "PAYLOAD RX")
+	assert.Contains(t, outputStr, "PAYLOAD TX")
+	assert.Contains(t, outputStr, "1.00 KiB")
+	assert.Contains(t, outputStr, "2.00 KiB")
+	assert.Contains(t, outputStr, "PORT BREAKDOWN")
+	assert.Equal(t, 2, strings.Count(outputStr, "┌"), "summary should use exactly two tables")
+	assert.NotContains(t, outputStr, "Per-protocol/port")
 }
 
 func TestLogMetricsJSON(t *testing.T) {
@@ -285,39 +288,16 @@ func TestFlushMetrics(t *testing.T) {
 	output, _ := io.ReadAll(r)
 	outputStr := string(output)
 
-	assert.Contains(t, outputStr, "Total Metrics:")
+	assert.Contains(t, outputStr, "RUN SUMMARY")
 }
 
-func TestPrintTable(t *testing.T) {
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	data := map[string]map[string]uint64{
-		"tcp": {
-			"8080": 100,
-			"8081": 200,
-		},
-		"udp": {
-			"9000": 300,
-		},
-	}
-
-	printTable("Test Table:", []string{"Protocol", "Port", "Count"}, data, false)
-
-	_ = w.Close()
-	os.Stdout = oldStdout
-
-	output, _ := io.ReadAll(r)
-	outputStr := string(output)
-
-	assert.Contains(t, outputStr, "Test Table:")
-	assert.Contains(t, outputStr, "tcp")
-	assert.Contains(t, outputStr, "8080")
-	assert.Contains(t, outputStr, "100")
-	assert.Contains(t, outputStr, "udp")
-	assert.Contains(t, outputStr, "9000")
-	assert.Contains(t, outputStr, "300")
+func TestSummaryValueFormatting(t *testing.T) {
+	assert.Equal(t, "—", formatSummaryCount(0))
+	assert.Equal(t, "30,139", formatSummaryCount(30139))
+	assert.Equal(t, "—", formatSummaryBytes(0))
+	assert.Equal(t, "5 B", formatSummaryBytes(5))
+	assert.Equal(t, "6.89 KiB", formatSummaryBytes(7060))
+	assert.Equal(t, "140.3 KiB", formatSummaryBytes(143635))
 }
 
 func TestGetSyncMapData(t *testing.T) {
@@ -458,21 +438,16 @@ func (mc *MetricsCollector) PrintSummary() {
 	mc.LogMetrics("human")
 }
 
-func TestPrintTableSorting(t *testing.T) {
+func TestHumanSummarySortsPorts(t *testing.T) {
+	mc := testMetricsCollector()
+	for port, count := range map[string]uint64{"80": 100, "8080": 200, "443": 150, "22": 50} {
+		mc.updateSyncMap(&mc.requestsReceived, "tcp", port, count)
+	}
+
 	oldStdout := os.Stdout
 	r, w, _ := os.Pipe()
 	os.Stdout = w
-
-	data := map[string]map[string]uint64{
-		"tcp": {
-			"80":   100,
-			"8080": 200,
-			"443":  150,
-			"22":   50,
-		},
-	}
-
-	printTable("Port Sorting Test:", []string{"Protocol", "Port", "Count"}, data, false)
+	mc.LogMetrics("human")
 
 	_ = w.Close()
 	os.Stdout = oldStdout
@@ -482,25 +457,24 @@ func TestPrintTableSorting(t *testing.T) {
 
 	lines := strings.Split(outputStr, "\n")
 	var portOrder []string
+	inPortBreakdown := false
 	for _, line := range lines {
-		if strings.Contains(line, "tcp") && strings.Contains(line, "│") {
+		if strings.Contains(line, "PORT BREAKDOWN") {
+			inPortBreakdown = true
+			continue
+		}
+		if inPortBreakdown && strings.Contains(line, "TCP") && strings.Contains(line, "│") {
 			parts := strings.Split(line, "│")
 			if len(parts) >= 3 {
 				port := strings.TrimSpace(parts[2])
-				if port != "" && port != "Port" {
+				if port != "" && port != "PORT" {
 					portOrder = append(portOrder, port)
 				}
 			}
 		}
 	}
 
-	// Ports should be in order: 22, 80, 443, 8080
-	if len(portOrder) >= 4 {
-		assert.Equal(t, "22", portOrder[0])
-		assert.Equal(t, "80", portOrder[1])
-		assert.Equal(t, "443", portOrder[2])
-		assert.Equal(t, "8080", portOrder[3])
-	}
+	assert.Equal(t, []string{"22", "80", "443", "8080"}, portOrder)
 }
 
 func TestLogMetricsJSONStructure(t *testing.T) {

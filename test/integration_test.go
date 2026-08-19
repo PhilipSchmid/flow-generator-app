@@ -321,13 +321,14 @@ func TestMultipleFlows(t *testing.T) {
 
 	// Check that flows were completed successfully
 	assert.Contains(t, outputStr, "Flow count limit reached; final flows drained")
-	assert.Contains(t, outputStr, "Total Requests Sent")
+	assert.Contains(t, outputStr, "RUN SUMMARY")
 
-	// Verify requests were sent - check that we have non-zero values
-	assert.Contains(t, outputStr, "│ Total Requests Sent")
-	assert.NotContains(t, outputStr, "│ Total Requests Sent         │ 0")
-	assert.Contains(t, outputStr, "│ Total TCP Requests Sent")
-	assert.Contains(t, outputStr, "│ Total UDP Requests Sent")
+	// Verify the standardized summary reports non-zero protocol totals.
+	totalSent := clientSummaryRequestsTX(t, outputStr, "TOTAL")
+	tcpSent := clientSummaryRequestsTX(t, outputStr, "TCP")
+	udpSent := clientSummaryRequestsTX(t, outputStr, "UDP")
+	assert.Positive(t, totalSent)
+	assert.Equal(t, totalSent, tcpSent+udpSent)
 
 	_ = serverCmd.Process.Kill()
 }

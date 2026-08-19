@@ -3,14 +3,17 @@ package metrics
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/PhilipSchmid/flow-generator-app/internal/logging"
 	"github.com/olekukonko/tablewriter"
+	"github.com/olekukonko/tablewriter/tw"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -286,38 +289,7 @@ func (mc *MetricsCollector) updateSyncMap(m *sync.Map, protocol, port string, de
 // LogMetrics prints all metrics in the specified format upon termination.
 func (mc *MetricsCollector) LogMetrics(logFormat string) {
 	if logFormat == "human" {
-		// Total Metrics Table
-		table := tablewriter.NewWriter(os.Stdout)
-		table.Header("Metric", "Value")
-		_ = table.Append("Total Requests Received", fmt.Sprintf("%d", atomic.LoadUint64(&mc.totalRequestsReceived)))
-		_ = table.Append("Total Requests Sent", fmt.Sprintf("%d", atomic.LoadUint64(&mc.totalRequestsSent)))
-		_ = table.Append("Total TCP Requests Received", fmt.Sprintf("%d", atomic.LoadUint64(&mc.totalTCPReceived)))
-		_ = table.Append("Total TCP Requests Sent", fmt.Sprintf("%d", atomic.LoadUint64(&mc.totalTCPSent)))
-		_ = table.Append("Total UDP Requests Received", fmt.Sprintf("%d", atomic.LoadUint64(&mc.totalUDPReceived)))
-		_ = table.Append("Total UDP Requests Sent", fmt.Sprintf("%d", atomic.LoadUint64(&mc.totalUDPSent)))
-		fmt.Println("Total Metrics:")
-		_ = table.Render()
-
-		// Per-Protocol/Port Metrics
-		requestsReceived := mc.getSyncMapData(&mc.requestsReceived)
-		if len(requestsReceived) > 0 {
-			printTable("Requests Received Per-protocol/port:", []string{"Protocol", "Port", "Requests Received"}, requestsReceived, false)
-		}
-
-		requestsSent := mc.getSyncMapData(&mc.requestsSent)
-		if len(requestsSent) > 0 {
-			printTable("Requests Sent Per-protocol/port:", []string{"Protocol", "Port", "Requests Sent"}, requestsSent, false)
-		}
-
-		bytesReceived := mc.getSyncMapData(&mc.bytesReceived)
-		if len(bytesReceived) > 0 {
-			printTable("Bytes Received Per-protocol/port:", []string{"Protocol", "Port", "Bytes Received"}, bytesReceived, false)
-		}
-
-		bytesSent := mc.getSyncMapData(&mc.bytesSent)
-		if len(bytesSent) > 0 {
-			printTable("Bytes Sent Per-protocol/port:", []string{"Protocol", "Port", "Bytes Sent"}, bytesSent, false)
-		}
+		_ = renderHumanSummary(os.Stdout, mc.Snapshot())
 	} else {
 		// JSON output for non-human formats
 		metricsData := map[string]interface{}{
@@ -337,35 +309,102 @@ func (mc *MetricsCollector) LogMetrics(logFormat string) {
 	}
 }
 
-// printTable prints a sorted table for a given metrics category
-func printTable(title string, headers []string, data map[string]map[string]uint64, supportsColor bool) {
-	table := tablewriter.NewWriter(os.Stdout)
-	table.Header(headers[0], headers[1], headers[2])
-	// Sort protocols alphabetically
-	var protocols []string
-	for protocol := range data {
+func renderHumanSummary(writer io.Writer, snapshot Snapshot) error {
+	type totals struct {
+		requestsRX, requestsTX uint64
+		payloadRX, payloadTX   uint64
+	}
+	protocolTotals := make(map[string]totals, 2)
+	var total totals
+	for _, port := range snapshot.Ports {
+		protocol := protocolTotals[port.Protocol]
+		protocol.requestsRX += port.RequestsReceived
+		protocol.requestsTX += port.RequestsSent
+		protocol.payloadRX += port.BytesReceived
+		protocol.payloadTX += port.BytesSent
+		protocolTotals[port.Protocol] = protocol
+		total.payloadRX += port.BytesReceived
+		total.payloadTX += port.BytesSent
+	}
+	total.requestsRX = snapshot.TotalRequestsReceived
+	total.requestsTX = snapshot.TotalRequestsSent
+
+	protocols := make([]string, 0, len(protocolTotals))
+	for protocol := range protocolTotals {
 		protocols = append(protocols, protocol)
 	}
 	sort.Strings(protocols)
+
+	_, _ = fmt.Fprintln(writer, "RUN SUMMARY")
+	summary := tablewriter.NewTable(writer, tablewriter.WithAlignment(tw.Alignment{
+		tw.AlignLeft, tw.AlignRight, tw.AlignRight, tw.AlignRight, tw.AlignRight,
+	}))
+	summary.Header("Protocol", "Requests RX", "Requests TX", "Payload RX", "Payload TX")
 	for _, protocol := range protocols {
-		portsMap := data[protocol]
-		// Sort ports numerically
-		var ports []string
-		for port := range portsMap {
-			ports = append(ports, port)
-		}
-		sort.Slice(ports, func(i, j int) bool {
-			pi, _ := strconv.Atoi(ports[i])
-			pj, _ := strconv.Atoi(ports[j])
-			return pi < pj
-		})
-		for _, port := range ports {
-			count := portsMap[port]
-			_ = table.Append(protocol, port, fmt.Sprintf("%d", count))
+		values := protocolTotals[protocol]
+		if err := summary.Append(strings.ToUpper(protocol), formatSummaryCount(values.requestsRX), formatSummaryCount(values.requestsTX), formatSummaryBytes(values.payloadRX), formatSummaryBytes(values.payloadTX)); err != nil {
+			return err
 		}
 	}
-	fmt.Println(title)
-	_ = table.Render()
+	summary.Footer("TOTAL", formatSummaryCount(total.requestsRX), formatSummaryCount(total.requestsTX), formatSummaryBytes(total.payloadRX), formatSummaryBytes(total.payloadTX))
+	if err := summary.Render(); err != nil {
+		return err
+	}
+
+	if len(snapshot.Ports) == 0 {
+		return nil
+	}
+	_, _ = fmt.Fprintln(writer, "\nPORT BREAKDOWN")
+	ports := tablewriter.NewTable(writer, tablewriter.WithAlignment(tw.Alignment{
+		tw.AlignLeft, tw.AlignRight, tw.AlignRight, tw.AlignRight, tw.AlignRight, tw.AlignRight,
+	}))
+	ports.Header("Protocol", "Port", "Requests RX", "Requests TX", "Payload RX", "Payload TX")
+	for _, port := range snapshot.Ports {
+		if err := ports.Append(strings.ToUpper(port.Protocol), port.Port, formatSummaryCount(port.RequestsReceived), formatSummaryCount(port.RequestsSent), formatSummaryBytes(port.BytesReceived), formatSummaryBytes(port.BytesSent)); err != nil {
+			return err
+		}
+	}
+	return ports.Render()
+}
+
+func formatSummaryCount(value uint64) string {
+	if value == 0 {
+		return "—"
+	}
+	digits := strconv.FormatUint(value, 10)
+	first := len(digits) % 3
+	if first == 0 {
+		first = 3
+	}
+	var formatted strings.Builder
+	formatted.Grow(len(digits) + len(digits)/3)
+	formatted.WriteString(digits[:first])
+	for index := first; index < len(digits); index += 3 {
+		formatted.WriteByte(',')
+		formatted.WriteString(digits[index : index+3])
+	}
+	return formatted.String()
+}
+
+func formatSummaryBytes(value uint64) string {
+	if value == 0 {
+		return "—"
+	}
+	units := []string{"B", "KiB", "MiB", "GiB", "TiB"}
+	scaled := float64(value)
+	unit := 0
+	for scaled >= 1024 && unit < len(units)-1 {
+		scaled /= 1024
+		unit++
+	}
+	if unit == 0 {
+		return formatSummaryCount(value) + " B"
+	}
+	precision := 1
+	if scaled < 10 {
+		precision = 2
+	}
+	return fmt.Sprintf("%.*f %s", precision, scaled, units[unit])
 }
 
 // getSyncMapData converts sync.Map to a nested map for JSON output.

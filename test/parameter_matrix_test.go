@@ -47,9 +47,9 @@ func TestClientServerParameterMatrix(t *testing.T) {
 			"--payload-size", "64",
 		)
 
-		assert.Equal(t, uint64(8), clientSummaryValue(t, output, "Total Requests Sent"))
-		assert.Equal(t, uint64(8), clientSummaryValue(t, output, "Total TCP Requests Sent"))
-		assert.Equal(t, uint64(0), clientSummaryValue(t, output, "Total UDP Requests Sent"))
+		assert.Equal(t, uint64(8), clientSummaryRequestsTX(t, output, "TOTAL"))
+		assert.Equal(t, uint64(8), clientSummaryRequestsTX(t, output, "TCP"))
+		assert.Equal(t, uint64(0), clientSummaryRequestsTX(t, output, "UDP"))
 
 		metrics := scrapeSentinelMetrics(t, server.metricsPort)
 		assert.Equal(t, float64(8), prometheusValue(t, metrics, "requests_received_total", "tcp", tcpPort))
@@ -76,9 +76,9 @@ func TestClientServerParameterMatrix(t *testing.T) {
 			"--payload-size", "128",
 		)
 
-		assert.Equal(t, uint64(6), clientSummaryValue(t, output, "Total Requests Sent"))
-		assert.Equal(t, uint64(0), clientSummaryValue(t, output, "Total TCP Requests Sent"))
-		assert.Equal(t, uint64(6), clientSummaryValue(t, output, "Total UDP Requests Sent"))
+		assert.Equal(t, uint64(6), clientSummaryRequestsTX(t, output, "TOTAL"))
+		assert.Equal(t, uint64(0), clientSummaryRequestsTX(t, output, "TCP"))
+		assert.Equal(t, uint64(6), clientSummaryRequestsTX(t, output, "UDP"))
 
 		metrics := scrapeSentinelMetrics(t, server.metricsPort)
 		assert.Equal(t, float64(6), prometheusValue(t, metrics, "requests_received_total", "udp", udpPort))
@@ -106,8 +106,8 @@ func TestClientServerParameterMatrix(t *testing.T) {
 			"--payload-size", "32",
 		)
 
-		tcpSent := clientSummaryValue(t, output, "Total TCP Requests Sent")
-		udpSent := clientSummaryValue(t, output, "Total UDP Requests Sent")
+		tcpSent := clientSummaryRequestsTX(t, output, "TCP")
+		udpSent := clientSummaryRequestsTX(t, output, "UDP")
 		assert.Positive(t, tcpSent)
 		assert.Positive(t, udpSent)
 		assert.Equal(t, uint64(100), tcpSent+udpSent)
@@ -143,7 +143,7 @@ func TestClientServerParameterMatrix(t *testing.T) {
 			"--payload-size", "48",
 		)
 
-		assert.Equal(t, uint64(100), clientSummaryValue(t, output, "Total TCP Requests Sent"))
+		assert.Equal(t, uint64(100), clientSummaryRequestsTX(t, output, "TCP"))
 		metrics := scrapeSentinelMetrics(t, server.metricsPort)
 		firstReceived := prometheusValue(t, metrics, "requests_received_total", "tcp", firstPort)
 		secondReceived := prometheusValue(t, metrics, "requests_received_total", "tcp", secondPort)
@@ -172,7 +172,7 @@ func TestClientServerParameterMatrix(t *testing.T) {
 			"--log-level", "info",
 		)
 
-		assert.Equal(t, uint64(10), clientSummaryValue(t, output, "Total TCP Requests Sent"))
+		assert.Equal(t, uint64(10), clientSummaryRequestsTX(t, output, "TCP"))
 		assert.Positive(t, structuredLogValue(t, output, "starts_skipped_at_capacity"))
 		metrics := scrapeSentinelMetrics(t, server.metricsPort)
 		assert.Equal(t, float64(10), prometheusValue(t, metrics, "requests_received_total", "tcp", tcpPort))
@@ -199,7 +199,7 @@ func TestClientServerParameterMatrix(t *testing.T) {
 			"--max-payload-size", "128",
 		)
 
-		assert.Equal(t, uint64(flowCount), clientSummaryValue(t, output, "Total TCP Requests Sent"))
+		assert.Equal(t, uint64(flowCount), clientSummaryRequestsTX(t, output, "TCP"))
 		metrics := scrapeSentinelMetrics(t, server.metricsPort)
 		bytesReceived := prometheusValue(t, metrics, "bytes_received_total", "tcp", tcpPort)
 		assert.GreaterOrEqual(t, bytesReceived, float64(flowCount*64))
@@ -417,14 +417,36 @@ func prometheusValue(t *testing.T, metrics, name, protocol string, port int) flo
 	return 0
 }
 
-func clientSummaryValue(t *testing.T, output, name string) uint64 {
+func clientSummaryRequestsTX(t *testing.T, output, protocol string) uint64 {
 	t.Helper()
-	pattern := regexp.MustCompile(regexp.QuoteMeta(name) + `\s*│\s*([0-9]+)`)
-	match := pattern.FindStringSubmatch(output)
-	require.Len(t, match, 2, "summary metric %q not found in:\n%s", name, output)
-	value, err := strconv.ParseUint(match[1], 10, 64)
-	require.NoError(t, err)
-	return value
+	inSummary := false
+	for _, line := range strings.Split(output, "\n") {
+		switch strings.TrimSpace(line) {
+		case "RUN SUMMARY":
+			inSummary = true
+			continue
+		case "PORT BREAKDOWN":
+			inSummary = false
+		}
+		if !inSummary {
+			continue
+		}
+		cells := strings.Split(line, "│")
+		if len(cells) < 7 || strings.TrimSpace(cells[1]) != protocol {
+			continue
+		}
+		value := strings.ReplaceAll(strings.TrimSpace(cells[3]), ",", "")
+		if value == "—" {
+			return 0
+		}
+		parsed, err := strconv.ParseUint(value, 10, 64)
+		require.NoError(t, err)
+		return parsed
+	}
+	if protocol == "TOTAL" {
+		t.Fatalf("summary protocol %q not found in:\n%s", protocol, output)
+	}
+	return 0
 }
 
 func structuredLogValue(t *testing.T, output, name string) uint64 {
