@@ -605,28 +605,32 @@ func (m Model) helpModal(colors palette, width int) string {
 	}
 	inner := maxInt(modalWidth-6, 24)
 	keyWidth := 18
+	primaryStyle := styled(colors.primary).Background(colors.surface)
+	mutedStyle := styled(colors.muted).Background(colors.surface)
+	textStyle := styled(colors.text).Background(colors.surface)
 	row := func(keys, action string) string {
-		key := styled(colors.primary).Bold(true).Render(fmt.Sprintf("%-*s", keyWidth, keys))
-		return key + "  " + styled(colors.text).Render(action)
+		key := primaryStyle.Bold(true).Render(fmt.Sprintf("%-*s", keyWidth, keys))
+		return key + "  " + textStyle.Render(action)
 	}
 	header := joinSides(
-		styled(colors.primary).Bold(true).Render("DASHBOARD HELP"),
-		styled(colors.muted).Render("Esc / ? / F1  close"),
+		primaryStyle.Bold(true).Render("DASHBOARD HELP"),
+		mutedStyle.Render("Esc / ? / F1  close"),
 		inner,
 	)
 	content := strings.Join([]string{
 		header,
-		styled(colors.muted).Bold(true).Render("KEYS") + strings.Repeat(" ", keyWidth-4+2) + styled(colors.muted).Bold(true).Render("ACTION"),
+		mutedStyle.Bold(true).Render("KEYS") + strings.Repeat(" ", keyWidth-4+2) + mutedStyle.Bold(true).Render("ACTION"),
 		row("← / h", "Previous time range"),
 		row("→ / l / Tab", "Next time range"),
 		row("1 / 5 / 0", "Select 1m / 5m / 15m"),
 		row("r", "Refresh the status sample now"),
 		row("q / F10", "Quit; traffic keeps running"),
-		styled(colors.muted).Render("Y ranges auto-scale. The dashed flow line is the configured target."),
+		mutedStyle.Render("Y ranges auto-scale. The dashed flow line is the configured target."),
 	}, "\n")
 	return lipgloss.NewStyle().Width(modalWidth).Padding(1, 2).
 		Border(lipgloss.DoubleBorder()).BorderForeground(colors.primary).
-		Background(colors.surface).Render(lipgloss.NewStyle().MaxWidth(inner).Render(content))
+		Background(colors.surface).
+		Render(lipgloss.NewStyle().MaxWidth(inner).Background(colors.surface).Render(content))
 }
 
 func overlayModal(background, modal string, width, height int) string {

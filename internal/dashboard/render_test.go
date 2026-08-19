@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"image/color"
 	"strings"
 	"testing"
 	"time"
@@ -105,6 +106,38 @@ func TestHelpRendersAsCenteredModal(t *testing.T) {
 	}
 	assert.Greater(t, helpRow, 8)
 	assert.Less(t, helpRow, 24)
+}
+
+func TestHelpModalUsesUniformBackground(t *testing.T) {
+	colors := newPalette(true, true)
+	modal := (Model{}).helpModal(colors, 200)
+	canvas := lipgloss.NewCanvas(lipgloss.Width(modal), lipgloss.Height(modal))
+	canvas.Compose(lipgloss.NewLayer(modal))
+	expected := colorRGBA(colors.surface)
+
+	for _, point := range []struct {
+		name string
+		x    int
+		y    int
+	}{
+		{name: "padding", x: 2, y: 1},
+		{name: "title", x: 3, y: 2},
+		{name: "key", x: 3, y: 4},
+		{name: "action", x: 23, y: 4},
+		{name: "note", x: 3, y: 9},
+	} {
+		cell := canvas.CellAt(point.x, point.y)
+		assert.NotNil(t, cell, point.name)
+		assert.Equal(t, expected, colorRGBA(cell.Style.Bg), point.name)
+	}
+}
+
+func colorRGBA(value color.Color) [4]uint32 {
+	if value == nil {
+		return [4]uint32{}
+	}
+	r, g, b, a := value.RGBA()
+	return [4]uint32{r, g, b, a}
 }
 
 func TestSparklineDownsamplesToWidth(t *testing.T) {
