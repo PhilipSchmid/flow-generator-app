@@ -14,7 +14,9 @@ import (
 
 const (
 	// EnvPrefix is the prefix for all environment variables
-	EnvPrefix      = "FLOW_GENERATOR"
+	EnvPrefix = "FLOW_GENERATOR"
+	// MaxPorts bounds the combined TCP and UDP port set exposed through status.
+	MaxPorts       = 256
 	maxPayloadSize = 1 << 20
 	maxFlowRate    = 1_000_000_000
 )
@@ -86,7 +88,7 @@ func (c *CommonConfig) Validate() error {
 		if err := validatePort(c.StatusPort, "status_port"); err != nil {
 			return err
 		}
-		if c.StatusPort == c.MetricsPort {
+		if samePort(c.StatusPort, c.MetricsPort) {
 			return fmt.Errorf("status_port and metrics_port must be different")
 		}
 	}
@@ -155,6 +157,9 @@ func (c *ClientConfig) Validate() error {
 	if err := validatePortList(c.UDPPorts, "udp_ports"); err != nil {
 		return err
 	}
+	if portListCount(c.TCPPorts)+portListCount(c.UDPPorts) > MaxPorts {
+		return fmt.Errorf("tcp_ports and udp_ports cannot contain more than %d ports combined", MaxPorts)
+	}
 
 	if c.MTU <= 0 || c.MSS <= 0 {
 		return fmt.Errorf("MTU and MSS must be positive")
@@ -207,15 +212,18 @@ func (c *ServerConfig) Validate() error {
 	if err := validatePortList(c.UDPPortsServer, "udp_ports_server"); err != nil {
 		return err
 	}
+	if portListCount(c.TCPPortsServer)+portListCount(c.UDPPortsServer) > MaxPorts {
+		return fmt.Errorf("tcp_ports_server and udp_ports_server cannot contain more than %d ports combined", MaxPorts)
+	}
 	if c.HealthPort != "" {
 		if err := validatePort(c.HealthPort, "health_port"); err != nil {
 			return err
 		}
 	}
-	if c.MetricsPort != "" && c.MetricsPort == c.HealthPort {
+	if samePort(c.MetricsPort, c.HealthPort) {
 		return fmt.Errorf("metrics_port and health_port must be different")
 	}
-	if c.StatusPort != "" && c.StatusPort != "0" && c.StatusPort == c.HealthPort {
+	if c.StatusPort != "" && c.StatusPort != "0" && samePort(c.StatusPort, c.HealthPort) {
 		return fmt.Errorf("status_port and health_port must be different")
 	}
 	if portListContains(c.TCPPortsServer, c.MetricsPort) {
@@ -408,12 +416,33 @@ func portListContains(value, target string) bool {
 	if value == "" || target == "" {
 		return false
 	}
+	targetPort, err := strconv.Atoi(target)
+	if err != nil {
+		return false
+	}
 	for _, rawPort := range strings.Split(value, ",") {
-		if strings.TrimSpace(rawPort) == target {
+		port, err := strconv.Atoi(strings.TrimSpace(rawPort))
+		if err == nil && port == targetPort {
 			return true
 		}
 	}
 	return false
+}
+
+func samePort(left, right string) bool {
+	if left == "" || right == "" {
+		return false
+	}
+	leftPort, leftErr := strconv.Atoi(left)
+	rightPort, rightErr := strconv.Atoi(right)
+	return leftErr == nil && rightErr == nil && leftPort == rightPort
+}
+
+func portListCount(value string) int {
+	if strings.TrimSpace(value) == "" {
+		return 0
+	}
+	return len(strings.Split(value, ","))
 }
 
 // setServerDefaults sets default values for server configuration
