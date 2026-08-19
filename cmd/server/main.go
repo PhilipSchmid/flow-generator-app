@@ -129,6 +129,11 @@ func main() {
 	tcpPorts := parsePorts(cfg.TCPPortsServer)
 	for _, port := range tcpPorts {
 		tcpServer := server.NewTCPServerWithStatus(port, tcpHandler, statusTracker)
+		tcpServer.SetFailureHandler(func(err error) {
+			healthChecker.SetReady(false)
+			healthChecker.SetHealthy(false)
+			logging.Logger.Errorf("TCP listener failed permanently: %v", err)
+		})
 		manager.AddServer(tcpServer)
 	}
 

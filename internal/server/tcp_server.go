@@ -12,9 +12,11 @@ import (
 	statusmetrics "github.com/PhilipSchmid/flow-generator-app/internal/status"
 )
 
-const networkFailureLogInterval = 30 * time.Second
-
-var tcpAcceptLogs = logging.NewRateLimiter(networkFailureLogInterval)
+const (
+	networkFailureLogInterval = 30 * time.Second
+	acceptRetryMinDelay       = 5 * time.Millisecond
+	acceptRetryMaxDelay       = time.Second
+)
 
 // TCPServer represents a TCP server
 type TCPServer struct {
@@ -22,6 +24,8 @@ type TCPServer struct {
 	listener      net.Listener
 	handler       *handlers.TCPHandler
 	statusTracker *statusmetrics.ServerTracker
+	acceptLogs    *logging.RateLimiter
+	onFailure     func(error)
 	wg            sync.WaitGroup
 	connsMu       sync.Mutex
 	conns         map[net.Conn]struct{}
@@ -46,10 +50,17 @@ func newTCPServer(port int, handler *handlers.TCPHandler, tracker *statusmetrics
 		port:          port,
 		handler:       handler,
 		statusTracker: tracker,
+		acceptLogs:    logging.NewRateLimiter(networkFailureLogInterval),
 		conns:         make(map[net.Conn]struct{}),
 		ctx:           ctx,
 		cancel:        cancel,
 	}
+}
+
+// SetFailureHandler registers a callback for a permanent listener failure.
+// It must be called before Start.
+func (s *TCPServer) SetFailureHandler(handler func(error)) {
+	s.onFailure = handler
 }
 
 // Start starts the TCP server
@@ -93,6 +104,7 @@ func (s *TCPServer) Stop() error {
 func (s *TCPServer) acceptConnections() {
 	defer s.wg.Done()
 
+	var retryDelay time.Duration
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
@@ -103,10 +115,30 @@ func (s *TCPServer) acceptConnections() {
 				if s.statusTracker != nil {
 					s.statusTracker.RecordAcceptError()
 				}
-				tcpAcceptLogs.Errorw("TCP connection accept failed", "port", s.port, "error", err)
+				s.acceptLogs.Errorw("TCP connection accept failed", "port", s.port, "error", err)
+				temporary, ok := err.(interface{ Temporary() bool })
+				if !ok || !temporary.Temporary() {
+					if s.onFailure != nil {
+						s.onFailure(err)
+					}
+					return
+				}
+				if retryDelay == 0 {
+					retryDelay = acceptRetryMinDelay
+				} else {
+					retryDelay = min(retryDelay*2, acceptRetryMaxDelay)
+				}
+				timer := time.NewTimer(retryDelay)
+				select {
+				case <-timer.C:
+				case <-s.ctx.Done():
+					timer.Stop()
+					return
+				}
 				continue
 			}
 		}
+		retryDelay = 0
 
 		s.connsMu.Lock()
 		if s.stopping {

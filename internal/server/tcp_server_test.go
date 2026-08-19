@@ -3,12 +3,14 @@ package server
 import (
 	"fmt"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/PhilipSchmid/flow-generator-app/internal/handlers"
 	"github.com/PhilipSchmid/flow-generator-app/internal/logging"
 	"github.com/PhilipSchmid/flow-generator-app/internal/metrics"
+	statusmetrics "github.com/PhilipSchmid/flow-generator-app/internal/status"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -173,7 +175,8 @@ func TestTCPServerConcurrentConnections(t *testing.T) {
 
 func TestTCPServerStopClosesIdleConnections(t *testing.T) {
 	mc := metrics.NewMetricsCollector()
-	server := NewTCPServer(0, handlers.NewTCPHandler(mc))
+	tracker := &statusmetrics.ServerTracker{}
+	server := NewTCPServerWithStatus(0, handlers.NewTCPHandlerWithStatus(mc, tracker), tracker)
 	require.NoError(t, server.Start())
 
 	port := server.Port()
@@ -194,6 +197,64 @@ func TestTCPServerStopClosesIdleConnections(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("server stop blocked on an idle client connection")
 	}
+	assert.Zero(t, tracker.Errors().Read)
+	assert.Zero(t, tracker.Errors().Write)
+}
+
+type temporaryAcceptError struct{}
+
+func (temporaryAcceptError) Error() string   { return "temporary accept failure" }
+func (temporaryAcceptError) Timeout() bool   { return false }
+func (temporaryAcceptError) Temporary() bool { return true }
+
+type failingTCPListener struct{ calls atomic.Uint64 }
+
+func (l *failingTCPListener) Accept() (net.Conn, error) {
+	l.calls.Add(1)
+	return nil, temporaryAcceptError{}
+}
+func (*failingTCPListener) Close() error   { return nil }
+func (*failingTCPListener) Addr() net.Addr { return &net.TCPAddr{} }
+
+type permanentAcceptError struct{}
+
+func (permanentAcceptError) Error() string { return "permanent accept failure" }
+
+type permanentFailingTCPListener struct{}
+
+func (*permanentFailingTCPListener) Accept() (net.Conn, error) { return nil, permanentAcceptError{} }
+func (*permanentFailingTCPListener) Close() error              { return nil }
+func (*permanentFailingTCPListener) Addr() net.Addr            { return &net.TCPAddr{} }
+
+func TestTCPServerBacksOffTemporaryAcceptFailures(t *testing.T) {
+	listener := &failingTCPListener{}
+	server := NewTCPServer(0, nil)
+	server.listener = listener
+	server.wg.Add(1)
+	go server.acceptConnections()
+
+	time.Sleep(30 * time.Millisecond)
+	server.cancel()
+	server.wg.Wait()
+	assert.GreaterOrEqual(t, listener.calls.Load(), uint64(2))
+	assert.Less(t, listener.calls.Load(), uint64(10), "temporary accept errors must not spin")
+}
+
+func TestTCPServerReportsPermanentAcceptFailure(t *testing.T) {
+	failure := make(chan error, 1)
+	server := NewTCPServer(0, nil)
+	server.listener = &permanentFailingTCPListener{}
+	server.SetFailureHandler(func(err error) { failure <- err })
+	server.wg.Add(1)
+	go server.acceptConnections()
+
+	select {
+	case err := <-failure:
+		assert.ErrorIs(t, err, permanentAcceptError{})
+	case <-time.After(time.Second):
+		t.Fatal("permanent listener failure was not reported")
+	}
+	server.wg.Wait()
 }
 
 func BenchmarkTCPServerRoundTrip(b *testing.B) {

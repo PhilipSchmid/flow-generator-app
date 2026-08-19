@@ -104,6 +104,17 @@ func TestHealthServerReportsBindFailure(t *testing.T) {
 	assert.False(t, checker.healthy.Load())
 }
 
+func TestHealthServerClearsStateWhenListenerFails(t *testing.T) {
+	checker := NewChecker()
+	require.NoError(t, checker.Start("0"))
+	checker.SetReady(true)
+	require.NoError(t, checker.listener.Close())
+	require.Eventually(t, func() bool {
+		return !checker.Healthy() && !checker.Ready()
+	}, time.Second, 10*time.Millisecond)
+	require.NoError(t, checker.Stop())
+}
+
 func TestStopWithoutStart(t *testing.T) {
 	checker := NewChecker()
 
