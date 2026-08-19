@@ -16,6 +16,8 @@ func TestHistoryCalculatesRatesAndLatency(t *testing.T) {
 	second := dashboardSnapshot(started, started.Add(2*time.Second), 120, 1400, 12)
 	first.Client.TCPLatency = latencyWith(10, 10*time.Millisecond, 2*time.Millisecond)
 	second.Client.TCPLatency = latencyWith(15, 20*time.Millisecond, 2*time.Millisecond)
+	first.Client.Errors = statusapi.ErrorCounts{Dial: 10, Read: 100}
+	second.Client.Errors = statusapi.ErrorCounts{Dial: 12, Read: 120}
 
 	var samples history
 	samples.add(first)
@@ -25,6 +27,8 @@ func TestHistoryCalculatesRatesAndLatency(t *testing.T) {
 	assert.InDelta(t, 20, current.FlowRate, 0.001)
 	assert.InDelta(t, 400, current.BytesTX, 0.001)
 	assert.Equal(t, float64(12), current.Active)
+	assert.Equal(t, float64(2), current.Errors.Dial)
+	assert.Equal(t, float64(20), current.Errors.Read)
 	assert.Equal(t, uint64(5), current.TCPLatency.Count)
 
 	latency, count := latencySummary(samples.samples)

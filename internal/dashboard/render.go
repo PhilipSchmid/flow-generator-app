@@ -759,20 +759,74 @@ func alignedTableRow(cells []string, widths []int) string {
 }
 
 func (m Model) errorLine(snapshot statusapi.Snapshot, colors palette) string {
-	var errors statusapi.ErrorCounts
-	if snapshot.Client != nil {
-		errors = snapshot.Client.Errors
-	} else if snapshot.Server != nil {
-		errors = snapshot.Server.Errors
-	}
+	errors := snapshotErrors(snapshot)
 	if totalErrors(errors) == 0 {
 		return ""
 	}
-	return styled(colors.danger).Render(fmt.Sprintf(
-		"Errors · dial %s · accept %s · read %s · write %s · mismatch %s · MTU %s",
-		formatCount(errors.Dial), formatCount(errors.Accept), formatCount(errors.Read),
-		formatCount(errors.Write), formatCount(errors.Mismatch), formatCount(errors.MTU),
-	))
+	lines := make([]string, 0, 2)
+	recent := averageErrorRates(m.history.window(5 * time.Second))
+	if parts := errorRateParts(recent); len(parts) > 0 {
+		lines = append(lines, styled(colors.danger).Bold(true).Render("RECENT ERRORS")+
+			styled(colors.muted).Render(" · 5s rolling · ")+
+			styled(colors.danger).Render(strings.Join(parts, " · ")))
+	}
+	lines = append(lines, styled(colors.muted).Render("LIFETIME ERRORS · "+strings.Join(errorCountParts(errors), " · ")))
+	return strings.Join(lines, "\n")
+}
+
+func averageErrorRates(samples []sample) errorRates {
+	var result errorRates
+	if len(samples) == 0 {
+		return result
+	}
+	for _, sample := range samples {
+		result.Dial += sample.Errors.Dial
+		result.Read += sample.Errors.Read
+		result.Write += sample.Errors.Write
+		result.Mismatch += sample.Errors.Mismatch
+		result.MTU += sample.Errors.MTU
+		result.Accept += sample.Errors.Accept
+	}
+	count := float64(len(samples))
+	result.Dial /= count
+	result.Read /= count
+	result.Write /= count
+	result.Mismatch /= count
+	result.MTU /= count
+	result.Accept /= count
+	return result
+}
+
+func errorRateParts(rates errorRates) []string {
+	parts := make([]string, 0, 6)
+	appendRate := func(label string, value float64) {
+		if value > 0 {
+			parts = append(parts, label+" "+formatRate(value))
+		}
+	}
+	appendRate("dial", rates.Dial)
+	appendRate("accept", rates.Accept)
+	appendRate("read", rates.Read)
+	appendRate("write", rates.Write)
+	appendRate("mismatch", rates.Mismatch)
+	appendRate("MTU", rates.MTU)
+	return parts
+}
+
+func errorCountParts(errors statusapi.ErrorCounts) []string {
+	parts := make([]string, 0, 6)
+	appendCount := func(label string, value uint64) {
+		if value > 0 {
+			parts = append(parts, label+" "+formatCount(value))
+		}
+	}
+	appendCount("dial", errors.Dial)
+	appendCount("accept", errors.Accept)
+	appendCount("read", errors.Read)
+	appendCount("write", errors.Write)
+	appendCount("mismatch", errors.Mismatch)
+	appendCount("MTU", errors.MTU)
+	return parts
 }
 
 func (m Model) helpModal(colors palette, width int) string {
