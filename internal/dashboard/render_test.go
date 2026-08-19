@@ -113,6 +113,20 @@ func TestLineChartUsesRequestedDimensions(t *testing.T) {
 	}), "chart should contain a Braille trace")
 }
 
+func TestTimeAxisLabelsSelectedWindow(t *testing.T) {
+	axis := timeAxis(40, 5*time.Minute)
+	assert.Equal(t, 40, lipgloss.Width(axis))
+	assert.Contains(t, axis, "−5m")
+	assert.Contains(t, axis, "−2m30s")
+	assert.True(t, strings.HasSuffix(axis, "now"))
+}
+
+func TestChartBoundsHandleEmptyHistory(t *testing.T) {
+	minimum, maximum := chartBounds(nil, 100)
+	assert.Zero(t, minimum)
+	assert.Equal(t, 100.0, maximum)
+}
+
 func TestTimelineSamplesUseTheSelectedWindowScale(t *testing.T) {
 	points := timelineSamples([]float64{1, 2, 3}, 120, 60)
 	assert.Len(t, points, 3)

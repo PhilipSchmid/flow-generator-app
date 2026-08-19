@@ -70,13 +70,13 @@ func (m Model) render() string {
 			chartHeight = 3
 		}
 		if m.height >= 40 {
-			chartHeight = 5
+			chartHeight = 6
 		}
 		if m.height >= 50 {
-			chartHeight = 7
+			chartHeight = 8
 		}
 		if m.height >= 60 {
-			chartHeight = 9
+			chartHeight = 10
 		}
 		rateTitle := "Requests/s"
 		reference := 0.0
@@ -84,14 +84,14 @@ func (m Model) render() string {
 			rateTitle = "Flow starts/s"
 			reference = snapshot.Configuration.Rate
 		}
-		flowChart := chartPanel(rateTitle, rateValues, chartWidth, chartHeight, reference, expectedSamples, formatRate(flow.Current), colors.primary, colors)
-		payloadChart := chartPanel("Payload throughput", values(window, func(s sample) float64 { return (s.BytesTX + s.BytesRX) * 8 }), chartWidth, chartHeight, 0, expectedSamples, "TX "+formatBits(tx.Current)+" · RX "+formatBits(rx.Current), colors.tx, colors)
+		flowChart := chartPanel(rateTitle, rateValues, chartWidth, chartHeight, reference, expectedSamples, formatRate(flow.Current), formatFloatRate, colors.primary, colors)
+		payloadChart := chartPanel("Payload throughput", values(window, func(s sample) float64 { return (s.BytesTX + s.BytesRX) * 8 }), chartWidth, chartHeight, 0, expectedSamples, "TX "+formatBits(tx.Current)+" · RX "+formatBits(rx.Current), formatTableBits, colors.tx, colors)
 		if width >= 120 {
 			activeTitle := "Active TCP"
 			if snapshot.Role == "client" {
 				activeTitle = "Active flows"
 			}
-			activeChart := chartPanel(activeTitle, values(window, func(s sample) float64 { return s.Active }), chartWidth, chartHeight, 0, expectedSamples, formatFloatCount(active.Current), colors.tcp, colors)
+			activeChart := chartPanel(activeTitle, values(window, func(s sample) float64 { return s.Active }), chartWidth, chartHeight, 0, expectedSamples, formatFloatCount(active.Current), formatFloatCount, colors.tcp, colors)
 			body = append(body, lipgloss.JoinHorizontal(lipgloss.Top, flowChart, " ", activeChart))
 			if snapshot.Role == "client" {
 				rttValues := latencySeries(window, 0.95)
@@ -99,10 +99,10 @@ func (m Model) render() string {
 				if latencyCount > 0 {
 					rttCurrent = formatLatency(latency.P95)
 				}
-				rttChart := chartPanel("Echo RTT p95", rttValues, chartWidth, chartHeight, 0, expectedSamples, rttCurrent, colors.udp, colors)
+				rttChart := chartPanel("Echo RTT p95", rttValues, chartWidth, chartHeight, 0, expectedSamples, rttCurrent, formatLatency, colors.udp, colors)
 				body = append(body, lipgloss.JoinHorizontal(lipgloss.Top, payloadChart, " ", rttChart))
 			} else {
-				body = append(body, chartPanel("Payload throughput", values(window, func(s sample) float64 { return (s.BytesTX + s.BytesRX) * 8 }), width, chartHeight, 0, expectedSamples, "TX "+formatBits(tx.Current)+" · RX "+formatBits(rx.Current), colors.tx, colors))
+				body = append(body, chartPanel("Payload throughput", values(window, func(s sample) float64 { return (s.BytesTX + s.BytesRX) * 8 }), width, chartHeight, 0, expectedSamples, "TX "+formatBits(tx.Current)+" · RX "+formatBits(rx.Current), formatTableBits, colors.tx, colors))
 			}
 		} else {
 			body = append(body, flowChart, payloadChart)
@@ -343,7 +343,7 @@ func (m Model) windowSelector(colors palette) string {
 	return strings.Join(parts, " ")
 }
 
-func chartPanel(title string, values []float64, width, height int, reference float64, expectedSamples int, current string, accent interface {
+func chartPanel(title string, values []float64, width, height int, reference float64, expectedSamples int, current string, formatAxis func(float64) string, accent interface {
 	RGBA() (uint32, uint32, uint32, uint32)
 }, colors palette) string {
 	inner := maxInt(width-4, 10)
@@ -355,10 +355,90 @@ func chartPanel(title string, values []float64, width, height int, reference flo
 			label += "  ·  ┄ TARGET"
 		}
 		heading = joinSides(styled(colors.muted).Bold(true).Render(label), styled(accent).Bold(true).Render(current), inner)
-		chart = lineChart(values, inner, height, reference, expectedSamples)
+		minimum, maximum := chartBounds(latestSamples(values, expectedSamples), reference)
+		axisWidth := chartAxisWidth(minimum, maximum, formatAxis)
+		plotWidth := maxInt(inner-axisWidth, 10)
+		trace := lineChart(values, plotWidth, height-1, reference, expectedSamples)
+		chart = chartWithAxes(trace, minimum, maximum, time.Duration(expectedSamples)*time.Second, formatAxis, accent, colors)
+	} else {
+		chart = styled(accent).Render(chart)
 	}
-	content := heading + "\n" + styled(accent).Render(chart)
+	content := heading + "\n" + chart
 	return lipgloss.NewStyle().Width(maxInt(width, 14)).Padding(0, 1).Border(lipgloss.RoundedBorder()).BorderForeground(colors.border).Render(content)
+}
+
+func chartAxisWidth(minimum, maximum float64, format func(float64) string) int {
+	middle := minimum + (maximum-minimum)/2
+	return maxInt(maxInt(lipgloss.Width(format(minimum)), lipgloss.Width(format(middle))), lipgloss.Width(format(maximum))) + 2
+}
+
+func chartWithAxes(trace string, minimum, maximum float64, window time.Duration, format func(float64) string, accent interface {
+	RGBA() (uint32, uint32, uint32, uint32)
+}, colors palette) string {
+	lines := strings.Split(trace, "\n")
+	if len(lines) == 0 {
+		return trace
+	}
+	middle := minimum + (maximum-minimum)/2
+	labelWidth := chartAxisWidth(minimum, maximum, format) - 2
+	labels := map[int]string{0: format(maximum), len(lines) - 1: format(minimum)}
+	if len(lines) > 2 {
+		labels[len(lines)/2] = format(middle)
+	}
+
+	var chart strings.Builder
+	for row, line := range lines {
+		if row > 0 {
+			chart.WriteByte('\n')
+		}
+		label := labels[row]
+		tick := "│"
+		if label != "" {
+			tick = "┤"
+		}
+		_, _ = fmt.Fprintf(&chart, "%s%s", styled(colors.muted).Render(fmt.Sprintf("%*s %s", labelWidth, label, tick)), styled(accent).Render(line))
+	}
+	chart.WriteByte('\n')
+	chart.WriteString(styled(colors.muted).Render(strings.Repeat(" ", labelWidth+1) + "└" + timeAxis(lipgloss.Width(lines[0]), window)))
+	return chart.String()
+}
+
+func timeAxis(width int, window time.Duration) string {
+	if width <= 0 {
+		return ""
+	}
+	axis := []rune(strings.Repeat("─", width))
+	left := negativeDurationLabel(window)
+	middle := negativeDurationLabel(window / 2)
+	right := "now"
+	placeAxisLabel(axis, left, 0)
+	placeAxisLabel(axis, right, width-len([]rune(right)))
+	middleStart := (width - len([]rune(middle))) / 2
+	if middleStart > len([]rune(left)) && middleStart+len([]rune(middle)) < width-len([]rune(right))-1 {
+		placeAxisLabel(axis, middle, middleStart)
+	}
+	return string(axis)
+}
+
+func negativeDurationLabel(duration time.Duration) string {
+	minutes := int(duration / time.Minute)
+	seconds := int(duration/time.Second) % 60
+	if seconds == 0 {
+		return fmt.Sprintf("−%dm", minutes)
+	}
+	return fmt.Sprintf("−%dm%02ds", minutes, seconds)
+}
+
+func placeAxisLabel(axis []rune, label string, start int) {
+	if start < 0 || start >= len(axis) {
+		return
+	}
+	for i, r := range []rune(label) {
+		if start+i >= len(axis) {
+			return
+		}
+		axis[start+i] = r
+	}
 }
 
 func (m Model) distributionTable(snapshot statusapi.Snapshot, flow, tx, rx, active, latency distribution, latencyCount uint64, colors palette, width int) string {
