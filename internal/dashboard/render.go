@@ -287,7 +287,7 @@ func (m Model) serverSummaryPanel(snapshot statusapi.Snapshot, flow distribution
 }
 
 func (m Model) windowBar(role string, colors palette, width int) string {
-	selector := m.windowSelector(colors)
+	selector := m.windowSelector(colors, width)
 	averages := m.windowAverages(role, colors)
 	if width < 100 {
 		return selector + "\n" + averages
@@ -329,16 +329,23 @@ func (m Model) windowAverages(role string, colors palette) string {
 	return styled(colors.muted).Render(strings.Join(parts, " · "))
 }
 
-func (m Model) windowSelector(colors palette) string {
-	parts := []string{styled(colors.muted).Bold(true).Render("TIME WINDOW")}
-	for i, duration := range windows {
+func (m Model) windowSelector(colors palette, width int) string {
+	labels := []string{"1 MIN", "5 MIN", "15 MIN"}
+	if width < 120 {
+		labels = []string{"1m", "5m", "15m"}
+	}
+	segments := make([]string, 0, len(windows))
+	for i := range windows {
 		style := lipgloss.NewStyle().Padding(0, 1).Foreground(colors.muted)
 		if i == m.windowIndex {
-			style = style.Foreground(colors.text).Background(colors.primary).Bold(true)
+			style = style.Foreground(colors.text).Background(colors.primary).Bold(true).Underline(true)
 		}
-		parts = append(parts, style.Render(windowLabel(duration)))
+		segments = append(segments, style.Render(labels[i]))
 	}
-	return strings.Join(parts, " ")
+	divider := styled(colors.border).Render("│")
+	chevron := func(value string) string { return styled(colors.primary).Bold(true).Render(value) }
+	return styled(colors.muted).Bold(true).Render("TIME RANGE") + "  " +
+		chevron("‹") + " " + strings.Join(segments, divider) + " " + chevron("›")
 }
 
 func chartPanel(title string, values []float64, width, height int, reference float64, expectedSamples int, current string, formatAxis func(float64) string, accent interface {
@@ -632,12 +639,12 @@ func overlayModal(background, modal string, width, height int) string {
 }
 
 func (m Model) footer(colors palette, width int) string {
-	left := keycap("←→ / Tab", colors) + styled(colors.muted).Render(" window  ") +
+	left := keycap("←→ / Tab", colors) + styled(colors.muted).Render(" range  ") +
 		keycap("r", colors) + styled(colors.muted).Render(" refresh  ") +
 		keycap("? / F1", colors) + styled(colors.muted).Render(" help  ") +
 		keycap("q / F10", colors) + styled(colors.muted).Render(" quit")
 	if width < 100 {
-		left = keycap("←→", colors) + styled(colors.muted).Render(" window  ") +
+		left = keycap("←→", colors) + styled(colors.muted).Render(" range  ") +
 			keycap("r", colors) + styled(colors.muted).Render(" refresh  ") +
 			keycap("?", colors) + styled(colors.muted).Render(" help  ") +
 			keycap("q", colors) + styled(colors.muted).Render(" quit")
