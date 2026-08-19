@@ -122,8 +122,12 @@ func TestHelpModalUsesUniformBackground(t *testing.T) {
 	}{
 		{name: "padding", x: 2, y: 1},
 		{name: "title", x: 3, y: 2},
+		{name: "header gap", x: 20, y: 2},
+		{name: "heading gap", x: 10, y: 3},
 		{name: "key", x: 3, y: 4},
+		{name: "column gap", x: 21, y: 4},
 		{name: "action", x: 23, y: 4},
+		{name: "row tail", x: 50, y: 4},
 		{name: "note", x: 3, y: 9},
 	} {
 		cell := canvas.CellAt(point.x, point.y)
