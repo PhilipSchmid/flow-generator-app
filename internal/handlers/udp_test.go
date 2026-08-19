@@ -9,6 +9,7 @@ import (
 
 	"github.com/PhilipSchmid/flow-generator-app/internal/logging"
 	"github.com/PhilipSchmid/flow-generator-app/internal/metrics"
+	statusmetrics "github.com/PhilipSchmid/flow-generator-app/internal/status"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -54,6 +55,25 @@ func TestNewUDPHandler(t *testing.T) {
 
 	assert.NotNil(t, handler)
 	assert.Equal(t, mc, handler.metricsCollector)
+}
+
+func TestUDPHandlerDoesNotCountShutdownClose(t *testing.T) {
+	tracker := &statusmetrics.ServerTracker{}
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	require.NoError(t, err)
+	done := make(chan struct{})
+	go func() {
+		NewUDPHandlerWithStatus(metrics.NewMetricsCollector(), tracker).Handle(conn)
+		close(done)
+	}()
+	require.NoError(t, conn.Close())
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("UDP handler did not stop after its listener closed")
+	}
+	assert.Zero(t, tracker.Errors().Read)
+	assert.Zero(t, tracker.Errors().Write)
 }
 
 func TestUDPHandlerHandle(t *testing.T) {

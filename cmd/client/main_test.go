@@ -46,6 +46,12 @@ func TestConstructAddress(t *testing.T) {
 	}
 }
 
+func TestProtocolPortsRateLimitFailuresIndependently(t *testing.T) {
+	first := newProtocolPort("127.0.0.1", "tcp", 8080)
+	second := newProtocolPort("127.0.0.1", "tcp", 8443)
+	assert.NotSame(t, first.logs.dial, second.logs.dial)
+}
+
 func TestGetPayloadSize(t *testing.T) {
 	tests := []struct {
 		name     string
