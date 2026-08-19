@@ -108,6 +108,41 @@ func TestPayloadIODisclosesSustainedImbalance(t *testing.T) {
 	assert.Contains(t, rendered, "Payload RX")
 }
 
+func TestHistoricalErrorsAreMutedAndLabeledAsLifetime(t *testing.T) {
+	started := time.Now().UTC().Add(-time.Minute)
+	first := dashboardSnapshot(started, started.Add(time.Second), 100, 1000, 10)
+	second := dashboardSnapshot(started, started.Add(2*time.Second), 120, 1400, 12)
+	first.Client.Errors = statusapi.ErrorCounts{Dial: 2650, Read: 53500}
+	second.Client.Errors = first.Client.Errors
+	model := Model{snapshot: &second, connected: true, width: 200, height: 50, color: false, dark: true}
+	model.history.add(first)
+	model.history.add(second)
+
+	rendered := model.render()
+	assert.Contains(t, rendered, "LIFETIME ERRORS · dial 2.65k · read 53.5k")
+	assert.NotContains(t, rendered, "RECENT ERRORS")
+	assert.NotContains(t, rendered, "accept 0")
+	assert.NotContains(t, rendered, "write 0")
+}
+
+func TestActiveErrorsShowRollingRatesBeforeLifetimeTotals(t *testing.T) {
+	started := time.Now().UTC().Add(-time.Minute)
+	first := dashboardSnapshot(started, started.Add(time.Second), 100, 1000, 10)
+	second := dashboardSnapshot(started, started.Add(2*time.Second), 120, 1400, 12)
+	second.Client.Errors = statusapi.ErrorCounts{Dial: 2, Read: 20}
+	model := Model{snapshot: &second, connected: true, width: 200, height: 50, color: false, dark: true}
+	model.history.add(first)
+	model.history.add(second)
+
+	rendered := model.render()
+	recent := strings.Index(rendered, "RECENT ERRORS")
+	lifetime := strings.Index(rendered, "LIFETIME ERRORS")
+	assert.GreaterOrEqual(t, recent, 0)
+	assert.Greater(t, lifetime, recent)
+	assert.Contains(t, rendered, "5s rolling · dial 2.00/s · read 20.0/s")
+	assert.Contains(t, rendered, "LIFETIME ERRORS · dial 2 · read 20")
+}
+
 func TestCompactConfigurationLine(t *testing.T) {
 	started := time.Now().UTC().Add(-time.Minute)
 	snapshot := dashboardSnapshot(started, started.Add(time.Second), 100, 1000, 10)

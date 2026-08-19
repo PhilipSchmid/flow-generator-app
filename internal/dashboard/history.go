@@ -32,9 +32,14 @@ type sample struct {
 	SkippedRate float64
 	FailureRate float64
 	SuccessRate float64
+	Errors      errorRates
 	TCPLatency  statusapi.LatencySnapshot
 	UDPLatency  statusapi.LatencySnapshot
 	Ports       []portSample
+}
+
+type errorRates struct {
+	Dial, Read, Write, Mismatch, MTU, Accept float64
 }
 
 type history struct {
@@ -65,6 +70,7 @@ func (h *history) add(snapshot statusapi.Snapshot) {
 		current.TCPLatency = latencyDelta(snapshot.Client.TCPLatency, h.previous.Client.TCPLatency)
 		current.UDPLatency = latencyDelta(snapshot.Client.UDPLatency, h.previous.Client.UDPLatency)
 	}
+	current.Errors = errorRateDelta(snapshotErrors(snapshot), snapshotErrors(*h.previous), seconds)
 	current.BytesTX, current.BytesRX, current.TCPRate, current.UDPRate, current.Ports = trafficDelta(snapshot, *h.previous, seconds)
 	h.samples = append(h.samples, current)
 	if len(h.samples) > maxHistorySamples {
@@ -73,6 +79,24 @@ func (h *history) add(snapshot statusapi.Snapshot) {
 	}
 	copy := snapshot
 	h.previous = &copy
+}
+
+func snapshotErrors(snapshot statusapi.Snapshot) statusapi.ErrorCounts {
+	if snapshot.Client != nil {
+		return snapshot.Client.Errors
+	}
+	if snapshot.Server != nil {
+		return snapshot.Server.Errors
+	}
+	return statusapi.ErrorCounts{}
+}
+
+func errorRateDelta(current, previous statusapi.ErrorCounts, seconds float64) errorRates {
+	return errorRates{
+		Dial: deltaRate(current.Dial, previous.Dial, seconds), Read: deltaRate(current.Read, previous.Read, seconds),
+		Write: deltaRate(current.Write, previous.Write, seconds), Mismatch: deltaRate(current.Mismatch, previous.Mismatch, seconds),
+		MTU: deltaRate(current.MTU, previous.MTU, seconds), Accept: deltaRate(current.Accept, previous.Accept, seconds),
+	}
 }
 
 func (h *history) window(duration time.Duration) []sample {
