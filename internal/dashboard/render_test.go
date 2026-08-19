@@ -139,6 +139,10 @@ func TestLineChartUsesRequestedDimensions(t *testing.T) {
 }
 
 func TestTimeAxisLabelsSelectedWindow(t *testing.T) {
+	oneMinute := timeAxis(40, time.Minute)
+	assert.Contains(t, oneMinute, "−30s")
+	assert.NotContains(t, oneMinute, "−0m")
+
 	axis := timeAxis(40, 5*time.Minute)
 	assert.Equal(t, 40, lipgloss.Width(axis))
 	assert.Contains(t, axis, "−5m")

@@ -428,6 +428,9 @@ func timeAxis(width int, window time.Duration) string {
 func negativeDurationLabel(duration time.Duration) string {
 	minutes := int(duration / time.Minute)
 	seconds := int(duration/time.Second) % 60
+	if minutes == 0 {
+		return fmt.Sprintf("−%ds", seconds)
+	}
 	if seconds == 0 {
 		return fmt.Sprintf("−%dm", minutes)
 	}
