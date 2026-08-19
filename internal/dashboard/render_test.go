@@ -82,6 +82,31 @@ func TestRenderSmallTerminal(t *testing.T) {
 	assert.Contains(t, model.render(), "Terminal too small")
 }
 
+func TestHelpRendersAsCenteredModal(t *testing.T) {
+	started := time.Now().UTC().Add(-time.Minute)
+	first := dashboardSnapshot(started, started.Add(time.Second), 100, 1000, 10)
+	second := dashboardSnapshot(started, started.Add(2*time.Second), 120, 1400, 12)
+	model := Model{snapshot: &second, connected: true, width: 120, height: 40, color: false, dark: true, showHelp: true}
+	model.history.add(first)
+	model.history.add(second)
+
+	lines := strings.Split(model.render(), "\n")
+	assert.Len(t, lines, 40)
+	assert.Contains(t, strings.Join(lines, "\n"), "DASHBOARD HELP")
+	assert.Contains(t, strings.Join(lines, "\n"), "Esc / ? / F1  close")
+	assert.Contains(t, lines[1], "FLOW GENERATOR", "modal should overlay rather than replace the dashboard")
+	var helpRow int
+	for row, line := range lines {
+		assert.LessOrEqual(t, lipgloss.Width(line), 120, "line exceeds terminal width: %q", line)
+		if strings.Contains(line, "DASHBOARD HELP") {
+			helpRow = row
+			assert.Greater(t, strings.Index(line, "DASHBOARD HELP"), 20)
+		}
+	}
+	assert.Greater(t, helpRow, 8)
+	assert.Less(t, helpRow, 24)
+}
+
 func TestSparklineDownsamplesToWidth(t *testing.T) {
 	values := make([]float64, 100)
 	for i := range values {

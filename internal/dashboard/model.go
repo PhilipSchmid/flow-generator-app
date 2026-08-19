@@ -48,9 +48,19 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.BackgroundColorMsg:
 		m.dark = message.IsDark()
 	case tea.KeyPressMsg:
-		switch message.String() {
+		key := message.String()
+		switch key {
 		case "q", "ctrl+c", "f10":
 			return m, tea.Quit
+		}
+		if m.showHelp {
+			switch key {
+			case "esc", "?", "f1":
+				m.showHelp = false
+			}
+			return m, nil
+		}
+		switch key {
 		case "left", "h", "shift+tab":
 			if m.windowIndex > 0 {
 				m.windowIndex--

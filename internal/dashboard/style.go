@@ -10,12 +10,13 @@ type palette struct {
 	primary, tcp, udp, tx, rx color.Color
 	healthy, warning, danger  color.Color
 	text, muted, border       color.Color
+	surface                   color.Color
 }
 
 func newPalette(dark, enabled bool) palette {
 	if !enabled {
 		none := lipgloss.NoColor{}
-		return palette{primary: none, tcp: none, udp: none, tx: none, rx: none, healthy: none, warning: none, danger: none, text: none, muted: none, border: none}
+		return palette{primary: none, tcp: none, udp: none, tx: none, rx: none, healthy: none, warning: none, danger: none, text: none, muted: none, border: none, surface: none}
 	}
 	choose := lipgloss.LightDark(dark)
 	return palette{
@@ -30,6 +31,7 @@ func newPalette(dark, enabled bool) palette {
 		text:    choose(lipgloss.Color("#0F172A"), lipgloss.Color("#E2E8F0")),
 		muted:   choose(lipgloss.Color("#64748B"), lipgloss.Color("#94A3B8")),
 		border:  choose(lipgloss.Color("#CBD5E1"), lipgloss.Color("#334155")),
+		surface: choose(lipgloss.Color("#F8FAFC"), lipgloss.Color("#111827")),
 	}
 }
 

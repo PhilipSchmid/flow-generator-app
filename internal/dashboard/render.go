@@ -55,9 +55,6 @@ func (m Model) render() string {
 		body = append(body, m.serverSummaryPanel(snapshot, flow, colors, width))
 	}
 	body = append(body, m.windowBar(snapshot.Role, colors, width))
-	if m.showHelp {
-		body = append(body, m.helpPanel(colors, width))
-	}
 
 	if width >= 90 && m.height >= 24 {
 		expectedSamples := int(m.selectedWindow() / time.Second)
@@ -139,7 +136,11 @@ func (m Model) render() string {
 			body = append(body, distribution, ports)
 		}
 	}
-	return withFooter(body, m.footer(colors, width), m.height)
+	rendered := withFooter(body, m.footer(colors, width), m.height)
+	if m.showHelp {
+		return overlayModal(rendered, m.helpModal(colors, width), width, m.height)
+	}
+	return rendered
 }
 
 func (m Model) healthState(colors palette) (string, interface {
@@ -559,14 +560,48 @@ func (m Model) errorLine(snapshot statusapi.Snapshot, colors palette) string {
 	))
 }
 
-func (m Model) helpPanel(colors palette, width int) string {
+func (m Model) helpModal(colors palette, width int) string {
+	modalWidth := minInt(maxInt(width-8, 52), 78)
+	if modalWidth > width-2 {
+		modalWidth = width - 2
+	}
+	inner := maxInt(modalWidth-6, 24)
+	keyWidth := 18
+	row := func(keys, action string) string {
+		key := styled(colors.primary).Bold(true).Render(fmt.Sprintf("%-*s", keyWidth, keys))
+		return key + "  " + styled(colors.text).Render(action)
+	}
+	header := joinSides(
+		styled(colors.primary).Bold(true).Render("DASHBOARD HELP"),
+		styled(colors.muted).Render("Esc / ? / F1  close"),
+		inner,
+	)
 	content := strings.Join([]string{
-		styled(colors.text).Bold(true).Render("SHORTCUTS") + styled(colors.muted).Render("  ·  keyboard-first; the monitored process keeps running when the dashboard exits"),
-		styled(colors.primary).Render("← / h") + styled(colors.muted).Render(" previous window  ·  ") + styled(colors.primary).Render("→ / l / Tab") + styled(colors.muted).Render(" next  ·  ") + styled(colors.primary).Render("1 / 5 / 0") + styled(colors.muted).Render(" select 1m / 5m / 15m"),
-		styled(colors.primary).Render("Space") + styled(colors.muted).Render(" pause or resume  ·  ") + styled(colors.primary).Render("r") + styled(colors.muted).Render(" refresh now  ·  ") + styled(colors.primary).Render("? / F1") + styled(colors.muted).Render(" toggle help  ·  ") + styled(colors.primary).Render("q / F10") + styled(colors.muted).Render(" quit"),
-		styled(colors.muted).Render("Charts keep a fixed time axis and auto-scale vertically; the dashed rate line marks target. p50 is the median; RTT uses sampled echoes."),
+		header,
+		styled(colors.muted).Bold(true).Render("KEYS") + strings.Repeat(" ", keyWidth-4+2) + styled(colors.muted).Bold(true).Render("ACTION"),
+		row("← / h", "Previous time range"),
+		row("→ / l / Tab", "Next time range"),
+		row("1 / 5 / 0", "Select 1m / 5m / 15m"),
+		row("Space", "Freeze or resume dashboard samples"),
+		row("r", "Refresh the status sample now"),
+		row("q / F10", "Quit; traffic keeps running"),
+		styled(colors.muted).Render("Y ranges auto-scale. The dashed flow line is the configured target."),
 	}, "\n")
-	return sectionPanel(content, width, lineCount(content), colors)
+	return lipgloss.NewStyle().Width(modalWidth).Padding(1, 2).
+		Border(lipgloss.DoubleBorder()).BorderForeground(colors.primary).
+		Background(colors.surface).Render(lipgloss.NewStyle().MaxWidth(inner).Render(content))
+}
+
+func overlayModal(background, modal string, width, height int) string {
+	modalWidth, modalHeight := lipgloss.Width(modal), lipgloss.Height(modal)
+	if height <= 0 {
+		height = lipgloss.Height(background)
+	}
+	x := maxInt((width-modalWidth)/2, 0)
+	y := maxInt((height-modalHeight)/2, 0)
+	base := lipgloss.NewLayer(background)
+	overlay := lipgloss.NewLayer(modal).X(x).Y(y).Z(1)
+	return lipgloss.NewCompositor(base, overlay).Render()
 }
 
 func (m Model) footer(colors palette, width int) string {
