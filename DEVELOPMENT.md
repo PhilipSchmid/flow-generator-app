@@ -116,7 +116,7 @@ Configuration precedence is:
 3. `config.yaml`, `config.json`, or `config.toml`
 4. Built-in defaults
 
-Config files are read from the current directory, `/etc/flow-generator`, or `~/.flow-generator`. CLI flags use hyphens, such as `--max-concurrent`. Existing underscore spellings such as `--max_concurrent` remain accepted. Environment variables and config keys keep their underscore form.
+Config files are read from the current directory, `/etc/flow-generator`, or `~/.flow-generator`. CLI flags use hyphens, such as `--max-concurrent`. Existing underscore spellings such as `--max_concurrent` remain accepted. Environment variables and config keys keep their underscore form. Client and server configurations allow up to 256 TCP and UDP ports combined.
 
 Examples:
 
@@ -214,7 +214,7 @@ Common failures:
 - **Connection refused**: confirm the server address, protocol, and port match the client.
 - **Dropped starts**: raise `max-concurrent`, shorten flow duration, or lower `rate`.
 
-Run `bin/dashboard` in a third terminal while developing locally. It auto-detects the default status port. The model keeps 15 minutes of one-second samples in memory; no history is written to disk. Press `r` to refresh, `?` or `F1` for help, and `q` or `F10` to quit. Use `--color=never` for deterministic render debugging.
+Run `bin/dashboard` for the server view or `bin/dashboard --endpoint http://127.0.0.1:9191` for the client view. Auto-detection prefers the server when both default endpoints are available. The model keeps 15 minutes of one-second samples in memory; no history is written to disk. Press `r` to refresh, `?` or `F1` for help, and `q` or `F10` to quit. Use `--color=never` for deterministic render debugging.
 
 ## Performance Checks
 

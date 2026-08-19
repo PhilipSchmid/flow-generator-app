@@ -24,10 +24,10 @@ Flow Generator runs a TCP/UDP echo server and a traffic client for testing Kuber
 
 ```bash
 # Run the echo server
-docker run -p 8080:8080 -p 8082:8082 -p 9090:9090 ghcr.io/philipschmid/echo-server:latest
+docker run --name echo-server -p 8080:8080 -p 8082:8082 -p 9090:9090 ghcr.io/philipschmid/echo-server:latest
 
 # Run the flow generator and publish its metrics endpoint
-docker run -p 9091:9091 ghcr.io/philipschmid/flow-generator:latest --server host.docker.internal
+docker run --name flow-generator -p 9091:9091 ghcr.io/philipschmid/flow-generator:latest --server host.docker.internal
 ```
 
 ### Build from Source
@@ -106,6 +106,8 @@ Client options for `flow-generator` and `ghcr.io/philipschmid/flow-generator:lat
 | `--mtu` | `FLOW_GENERATOR_MTU` | `1500` | Maximum allowed UDP payload size in bytes |
 | `--mss` | `FLOW_GENERATOR_MSS` | `1460` | TCP segmentation warning threshold in bytes |
 
+Each process accepts at most 256 TCP and UDP ports combined.
+
 ## Usage Examples
 
 ### Basic TCP Echo Test
@@ -172,8 +174,9 @@ In constant mode, each flow lasts `max-concurrent / rate` seconds. The example t
 `make build` creates `bin/dashboard`; both container images include `/dashboard`. It reads the running process through its loopback status endpoint:
 
 ```bash
-# Local source build
+# Local source build: server, then client
 ./bin/dashboard
+./bin/dashboard --endpoint http://127.0.0.1:9191
 
 # Kubernetes
 kubectl exec -it deploy/echo-server -- /dashboard
@@ -194,7 +197,7 @@ The client view shows flow rate, capacity, payload I/O, failures, latency, and p
 | `?`, `F1` | Toggle dashboard help |
 | `q`, `F10` | Leave the dashboard; the monitored process keeps running |
 
-Default endpoints are detected automatically. For a custom status port:
+Auto-detection prefers the server on `9190`; pass the endpoint for the client or a custom port:
 
 ```bash
 /dashboard --endpoint http://127.0.0.1:9291
