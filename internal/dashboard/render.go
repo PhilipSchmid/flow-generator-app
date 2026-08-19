@@ -218,7 +218,8 @@ func (m Model) clientLoadPanel(snapshot statusapi.Snapshot, flow, active distrib
 		accent = colors.healthy
 	}
 	recent := m.history.window(5 * time.Second)
-	if summarize(values(recent, func(sample sample) float64 { return sample.SkippedRate })).Average > 0 {
+	recentSkipped := summarize(values(recent, func(sample sample) float64 { return sample.SkippedRate })).Average
+	if recentSkipped > 0 {
 		accent = colors.warning
 	}
 	if summarize(values(recent, func(sample sample) float64 { return sample.FailureRate })).Average > 0 {
@@ -237,12 +238,20 @@ func (m Model) clientLoadPanel(snapshot statusapi.Snapshot, flow, active distrib
 	if maxConcurrent > activeCount {
 		headroom = maxConcurrent - activeCount
 	}
-	rateLine := strings.Join([]string{
-		styled(accent).Bold(true).Render(formatRate(flow.Current)) + styled(colors.muted).Render(" achieved"),
-		styled(colors.text).Render(formatRate(target)) + styled(colors.muted).Render(" target"),
+	skippedStyle := styled(colors.muted)
+	if recentSkipped > 0 {
+		skippedStyle = styled(colors.warning).Bold(true)
+	}
+	rateParts := []string{
+		styled(accent).Bold(true).Render(formatRate(flow.Current)) + styled(colors.muted).Render(" started"),
+		styled(colors.text).Render(formatRate(target)) + styled(colors.muted).Render(" scheduled"),
+		skippedStyle.Render(formatRate(recentSkipped)) + styled(colors.muted).Render(" skipped"),
 		styled(colors.tcp).Bold(true).Render(fmt.Sprintf("%s / %s", formatCount(activeCount), formatCount(maxConcurrent))) + styled(colors.muted).Render(" active"),
-		styled(colors.text).Render(formatCount(headroom)) + styled(colors.muted).Render(" headroom"),
-	}, styled(colors.border).Render("  ·  "))
+	}
+	if inner >= 100 {
+		rateParts = append(rateParts, styled(colors.text).Render(formatCount(headroom))+styled(colors.muted).Render(" headroom"))
+	}
+	rateLine := strings.Join(rateParts, styled(colors.border).Render("  ·  "))
 	lifetimeLine := strings.Join([]string{
 		styled(colors.muted).Render("LIFETIME"),
 		styled(colors.text).Render(formatCount(snapshot.Client.FlowsStarted)) + styled(colors.muted).Render(" started"),
@@ -352,14 +361,13 @@ func chartPanel(title string, values []float64, width, height int, reference flo
 	RGBA() (uint32, uint32, uint32, uint32)
 }, colors palette) string {
 	inner := maxInt(width-4, 10)
-	heading := joinSides(styled(colors.muted).Bold(true).Render(strings.ToUpper(title)), styled(accent).Bold(true).Render(current), inner)
+	label := strings.ToUpper(title)
+	if reference > 0 {
+		label += "  ·  ┄ TARGET " + formatRate(reference)
+	}
+	heading := joinSides(styled(colors.muted).Bold(true).Render(label), styled(accent).Bold(true).Render(current), inner)
 	chart := sparkline(values, inner, reference, expectedSamples)
 	if height > 1 {
-		label := strings.ToUpper(title) + "  ·  AUTO RANGE"
-		if reference > 0 {
-			label += "  ·  ┄ TARGET"
-		}
-		heading = joinSides(styled(colors.muted).Bold(true).Render(label), styled(accent).Bold(true).Render(current), inner)
 		minimum, maximum := chartBounds(latestSamples(values, expectedSamples), reference)
 		axisWidth := chartAxisWidth(minimum, maximum, formatAxis)
 		plotWidth := maxInt(inner-axisWidth, 10)

@@ -47,6 +47,27 @@ func TestRenderMissingLatencyAsUnavailable(t *testing.T) {
 	assert.Contains(t, rendered, "—")
 }
 
+func TestCapacityLimitedDashboardExplainsMissingStarts(t *testing.T) {
+	started := time.Now().UTC().Add(-time.Minute)
+	first := dashboardSnapshot(started, started.Add(time.Second), 100, 1000, 195)
+	second := dashboardSnapshot(started, started.Add(2*time.Second), 197, 1400, 197)
+	first.Configuration.Rate, second.Configuration.Rate = 100, 100
+	first.Configuration.MaxConcurrent, second.Configuration.MaxConcurrent = 200, 200
+	second.Client.StartsSkippedAtCapacity = 3
+	model := Model{snapshot: &second, connected: true, width: 200, height: 50, color: false, dark: true}
+	model.history.add(first)
+	model.history.add(second)
+
+	rendered := model.render()
+	assert.Contains(t, rendered, "97.0/s")
+	assert.Contains(t, rendered, " started")
+	assert.Contains(t, rendered, "100/s scheduled")
+	assert.Contains(t, rendered, "3.00/s")
+	assert.Contains(t, rendered, " skipped")
+	assert.Contains(t, rendered, "┄ TARGET 100/s")
+	assert.NotContains(t, rendered, "AUTO RANGE")
+}
+
 func TestCompactConfigurationLine(t *testing.T) {
 	started := time.Now().UTC().Add(-time.Minute)
 	snapshot := dashboardSnapshot(started, started.Add(time.Second), 100, 1000, 10)
