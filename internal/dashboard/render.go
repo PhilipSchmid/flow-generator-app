@@ -507,10 +507,13 @@ func (m Model) portTable(snapshot statusapi.Snapshot, colors palette, width int)
 	var builder strings.Builder
 	builder.WriteString(styled(colors.muted).Bold(true).Render("PORT ACTIVITY  ·  CURRENT"))
 	builder.WriteString("\n")
+	var columnWidths []int
 	if snapshot.Role == "client" {
-		builder.WriteString(styled(colors.muted).Render(fmt.Sprintf("%-5s %6s %10s %11s %12s %12s %9s", "PROTO", "PORT", "FLOW/S", "PACKETS/S", "TX", "RX", "FAIL/S")))
+		columnWidths = expandedColumnWidths(width, []int{5, 6, 10, 11, 12, 12, 9})
+		builder.WriteString(styled(colors.muted).Render(alignedTableRow([]string{"PROTO", "PORT", "FLOW/S", "PACKETS/S", "TX", "RX", "FAIL/S"}, columnWidths)))
 	} else {
-		builder.WriteString(styled(colors.muted).Render(fmt.Sprintf("%-5s %6s %12s %12s %12s", "PROTO", "PORT", "REQUESTS/S", "TX", "RX")))
+		columnWidths = expandedColumnWidths(width, []int{5, 6, 12, 12, 12})
+		builder.WriteString(styled(colors.muted).Render(alignedTableRow([]string{"PROTO", "PORT", "REQUESTS/S", "TX", "RX"}, columnWidths)))
 	}
 	for _, port := range ports[:limit] {
 		protocolColor := colors.tcp
@@ -531,13 +534,41 @@ func (m Model) portTable(snapshot statusapi.Snapshot, colors palette, width int)
 			if port.Protocol == "udp" {
 				packetRate = formatFloatRate(port.PacketRate)
 			}
-			line = fmt.Sprintf("\n%-5s %6s %10s %11s %12s %12s %9s", strings.ToUpper(port.Protocol), port.Port, formatFloatRate(activity), packetRate, formatBits(port.BytesTX*8), formatBits(port.BytesRX*8), formatFloatRate(port.Failures))
+			line = "\n" + alignedTableRow([]string{strings.ToUpper(port.Protocol), port.Port, formatFloatRate(activity), packetRate, formatBits(port.BytesTX * 8), formatBits(port.BytesRX * 8), formatFloatRate(port.Failures)}, columnWidths)
 		} else {
-			line = fmt.Sprintf("\n%-5s %6s %12s %12s %12s", strings.ToUpper(port.Protocol), port.Port, formatFloatRate(activity)+" "+activityLabel, formatBits(port.BytesTX*8), formatBits(port.BytesRX*8))
+			line = "\n" + alignedTableRow([]string{strings.ToUpper(port.Protocol), port.Port, formatFloatRate(activity) + " " + activityLabel, formatBits(port.BytesTX * 8), formatBits(port.BytesRX * 8)}, columnWidths)
 		}
 		builder.WriteString(styled(protocolColor).Render(line))
 	}
 	return lipgloss.NewStyle().MaxWidth(width).Render(builder.String())
+}
+
+func expandedColumnWidths(width int, minimums []int) []int {
+	widths := append([]int(nil), minimums...)
+	used := len(widths) - 1
+	for _, columnWidth := range widths {
+		used += columnWidth
+	}
+	remaining := width - used
+	for remaining > 0 && len(widths) > 1 {
+		for column := 1; column < len(widths) && remaining > 0; column++ {
+			widths[column]++
+			remaining--
+		}
+	}
+	return widths
+}
+
+func alignedTableRow(cells []string, widths []int) string {
+	if len(cells) == 0 || len(cells) != len(widths) {
+		return ""
+	}
+	var row strings.Builder
+	_, _ = fmt.Fprintf(&row, "%-*s", widths[0], cells[0])
+	for column := 1; column < len(cells); column++ {
+		_, _ = fmt.Fprintf(&row, " %*s", widths[column], cells[column])
+	}
+	return row.String()
 }
 
 func (m Model) errorLine(snapshot statusapi.Snapshot, colors palette) string {

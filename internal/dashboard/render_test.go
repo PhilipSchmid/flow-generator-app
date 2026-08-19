@@ -186,6 +186,20 @@ func TestWideDashboardSpacesPercentileColumns(t *testing.T) {
 	assert.GreaterOrEqual(t, strings.Index(header, "P50")-strings.Index(header, "AVG"), 12)
 }
 
+func TestPortColumnsFillWidePanel(t *testing.T) {
+	clientHeaders := []string{"PROTO", "PORT", "FLOW/S", "PACKETS/S", "TX", "RX", "FAIL/S"}
+	clientWidths := expandedColumnWidths(95, []int{5, 6, 10, 11, 12, 12, 9})
+	clientRow := alignedTableRow(clientHeaders, clientWidths)
+	assert.Equal(t, 95, lipgloss.Width(clientRow))
+	assert.True(t, strings.HasSuffix(clientRow, "FAIL/S"))
+
+	serverHeaders := []string{"PROTO", "PORT", "REQUESTS/S", "TX", "RX"}
+	serverWidths := expandedColumnWidths(95, []int{5, 6, 12, 12, 12})
+	serverRow := alignedTableRow(serverHeaders, serverWidths)
+	assert.Equal(t, 95, lipgloss.Width(serverRow))
+	assert.True(t, strings.HasSuffix(serverRow, "RX"))
+}
+
 func serverDashboardSnapshot(started, sampled time.Time, requests uint64) statusapi.Snapshot {
 	return statusapi.Snapshot{
 		SchemaVersion: statusapi.SchemaVersion, Role: "server", Version: "v1.2.3",
