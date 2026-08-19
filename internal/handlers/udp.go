@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net"
 	"strconv"
-	"time"
 
 	"github.com/PhilipSchmid/flow-generator-app/internal/logging"
 	"github.com/PhilipSchmid/flow-generator-app/internal/metrics"
@@ -20,8 +19,8 @@ var udpFailureLogs = struct {
 	read  *logging.RateLimiter
 	write *logging.RateLimiter
 }{
-	read:  logging.NewRateLimiter(time.Second),
-	write: logging.NewRateLimiter(time.Second),
+	read:  logging.NewRateLimiter(networkFailureLogInterval),
+	write: logging.NewRateLimiter(networkFailureLogInterval),
 }
 
 // UDPHandler handles UDP packets

@@ -3,12 +3,15 @@ package logging
 import (
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
@@ -119,6 +122,26 @@ func TestLoggerFormats(t *testing.T) {
 		InitLogger("human", "info")
 		assert.NotNil(t, Logger)
 	})
+}
+
+func TestHumanLoggerKeepsEventsOnSingleLines(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "human.log")
+	cfg := loggerConfig("human", "warn")
+	cfg.OutputPaths = []string{logPath}
+	cfg.ErrorOutputPaths = []string{logPath}
+	logger, err := cfg.Build()
+	require.NoError(t, err)
+
+	logger.Warn("peer unavailable")
+	logger.Error("listener failed")
+	require.NoError(t, logger.Sync())
+
+	contents, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(contents)), "\n")
+	assert.Len(t, lines, 2)
+	assert.Contains(t, lines[0], "peer unavailable")
+	assert.Contains(t, lines[1], "listener failed")
 }
 
 func TestConcurrentLogging(t *testing.T) {

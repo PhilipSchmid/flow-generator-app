@@ -96,8 +96,7 @@ func getLogLevel(level string) zapcore.Level {
 	}
 }
 
-// InitLogger initializes the logger based on logformat and loglevel
-func InitLogger(logFormat string, logLevel string) {
+func loggerConfig(logFormat string, logLevel string) zap.Config {
 	var cfg zap.Config
 
 	switch logFormat {
@@ -111,9 +110,19 @@ func InitLogger(logFormat string, logLevel string) {
 	}
 
 	cfg.Level = zap.NewAtomicLevelAt(getLogLevel(logLevel))
+	// Zap's development preset expands every warning into a stack trace. Peer
+	// loss is an expected operational condition, so keep human logs one event
+	// per line. Panics still include the runtime stack.
+	cfg.DisableStacktrace = true
 	// Repeated network failures can otherwise make logging the bottleneck. Keep
 	// the first messages for diagnosis, then sample identical log sites.
 	cfg.Sampling = &zap.SamplingConfig{Initial: 100, Thereafter: 100}
+	return cfg
+}
+
+// InitLogger initializes the logger based on logformat and loglevel
+func InitLogger(logFormat string, logLevel string) {
+	cfg := loggerConfig(logFormat, logLevel)
 
 	// Build the logger
 	logger, err := cfg.Build()
