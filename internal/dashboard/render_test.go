@@ -87,24 +87,64 @@ func TestSparklineDownsamplesToWidth(t *testing.T) {
 	for i := range values {
 		values[i] = float64(i)
 	}
-	line := sparkline(values, 20, 0)
+	line := sparkline(values, 20, 0, 100)
 	assert.Equal(t, 20, len([]rune(line)))
 	assert.False(t, strings.Contains(line, " "))
 }
 
-func TestSparklineStretchesShortHistoryToWidth(t *testing.T) {
-	line := sparkline([]float64{1, 2, 3}, 30, 0)
+func TestSparklineRightAlignsShortHistory(t *testing.T) {
+	line := sparkline([]float64{1, 2, 3}, 30, 0, 60)
 	assert.Equal(t, 30, len([]rune(line)))
-	assert.NotEqual(t, []rune(line)[0], []rune(line)[29])
+	assert.Equal(t, ' ', []rune(line)[0])
+	assert.NotEqual(t, ' ', []rune(line)[29])
 }
 
 func TestLineChartUsesRequestedDimensions(t *testing.T) {
-	chart := lineChart([]float64{1, 10, 2, 8}, 24, 4, 0)
+	chart := lineChart([]float64{1, 10, 2, 8}, 24, 4, 0, 60)
 	lines := strings.Split(chart, "\n")
 	assert.Len(t, lines, 4)
 	for _, line := range lines {
-		assert.Equal(t, 24, len([]rune(line)))
+		assert.Equal(t, 24, lipgloss.Width(line))
 	}
+	assert.NotContains(t, chart, "●")
+	assert.NotContains(t, chart, "│")
+	assert.True(t, strings.ContainsFunc(chart, func(r rune) bool {
+		return r >= 0x2800 && r <= 0x28ff
+	}), "chart should contain a Braille trace")
+}
+
+func TestTimelineSamplesUseTheSelectedWindowScale(t *testing.T) {
+	points := timelineSamples([]float64{1, 2, 3}, 120, 60)
+	assert.Len(t, points, 3)
+	assert.Greater(t, points[0].x, 110)
+	assert.Equal(t, 119, points[len(points)-1].x)
+
+	fullWindow := make([]float64, 60)
+	for i := range fullWindow {
+		fullWindow[i] = float64(i)
+	}
+	points = timelineSamples(fullWindow, 120, 60)
+	assert.Equal(t, 0, points[0].x)
+	assert.Equal(t, 119, points[len(points)-1].x)
+}
+
+func TestWideDashboardSpacesPercentileColumns(t *testing.T) {
+	started := time.Now().UTC().Add(-time.Minute)
+	first := dashboardSnapshot(started, started.Add(time.Second), 100, 1000, 10)
+	second := dashboardSnapshot(started, started.Add(2*time.Second), 120, 1400, 12)
+	model := Model{snapshot: &second, connected: true, width: 200, height: 50, color: false, dark: true}
+	model.history.add(first)
+	model.history.add(second)
+
+	var header string
+	for _, line := range strings.Split(model.render(), "\n") {
+		if strings.Contains(line, "METRIC") && strings.Contains(line, "P50") {
+			header = line
+			break
+		}
+	}
+	assert.NotEmpty(t, header)
+	assert.GreaterOrEqual(t, strings.Index(header, "P50")-strings.Index(header, "AVG"), 12)
 }
 
 func serverDashboardSnapshot(started, sampled time.Time, requests uint64) statusapi.Snapshot {
