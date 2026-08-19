@@ -55,6 +55,18 @@ var tcpReadBufferPool = sync.Pool{
 	New: func() any { return new([tcpReadBufferSize]byte) },
 }
 
+var flowLogs = struct {
+	tcpDial, tcpWrite, tcpRead, tcpMismatch *logging.RateLimiter
+	udpDial, udpWrite, udpRead, udpTimeout  *logging.RateLimiter
+	udpMismatch, udpMTU                     *logging.RateLimiter
+}{
+	tcpDial: logging.NewRateLimiter(time.Second), tcpWrite: logging.NewRateLimiter(time.Second),
+	tcpRead: logging.NewRateLimiter(time.Second), tcpMismatch: logging.NewRateLimiter(time.Second),
+	udpDial: logging.NewRateLimiter(time.Second), udpWrite: logging.NewRateLimiter(time.Second),
+	udpRead: logging.NewRateLimiter(time.Second), udpTimeout: logging.NewRateLimiter(time.Second),
+	udpMismatch: logging.NewRateLimiter(time.Second), udpMTU: logging.NewRateLimiter(time.Second),
+}
+
 // tcpCloseGracePeriod bounds how long we wait to drain a reply that was
 // already in flight when a flow's deadline expired, before closing the
 // socket. Keeps closes clean (FIN) instead of racing the peer into an RST.
@@ -237,7 +249,7 @@ func generateFlowObserved(mainCtx context.Context, cfg *config.ClientConfig, mc 
 		if err != nil {
 			if !expectedFlowEnd(flowCtx, err) {
 				observer.dialError()
-				logging.Logger.Warnf("Failed to connect to %s:%d (TCP): %v", cfg.Server, pp.Port, err)
+				flowLogs.tcpDial.Warnw("TCP connection failed", "server", cfg.Server, "port", pp.Port, "error", err)
 			}
 			return finishFlow(mainCtx, false)
 		}
@@ -253,7 +265,7 @@ func generateFlowObserved(mainCtx context.Context, cfg *config.ClientConfig, mc 
 		if err != nil {
 			if !expectedFlowEnd(flowCtx, err) {
 				observer.writeError()
-				logging.Logger.Warnf("Failed to write to TCP connection: %v", err)
+				flowLogs.tcpWrite.Warnw("TCP write failed", "server", cfg.Server, "port", pp.Port, "error", err)
 			}
 			return finishFlow(mainCtx, false)
 		}
@@ -270,7 +282,7 @@ func generateFlowObserved(mainCtx context.Context, cfg *config.ClientConfig, mc 
 				expected := expectedFlowEnd(flowCtx, err)
 				if !expected {
 					observer.readError()
-					logging.Logger.Warnf("Failed to read full TCP response: %v", err)
+					flowLogs.tcpRead.Warnw("TCP read failed", "server", cfg.Server, "port", pp.Port, "error", err)
 				}
 				break
 			}
@@ -280,7 +292,7 @@ func generateFlowObserved(mainCtx context.Context, cfg *config.ClientConfig, mc 
 		if totalReceived != payloadSize {
 			if flowCtx.Err() == nil {
 				observer.mismatch()
-				logging.Logger.Warnf("TCP byte mismatch: sent %d bytes, received %d bytes", payloadSize, totalReceived)
+				flowLogs.tcpMismatch.Warnw("TCP byte mismatch", "server", cfg.Server, "port", pp.Port, "sent", payloadSize, "received", totalReceived)
 			}
 
 			// The read above broke early (deadline hit or connection error),
@@ -303,7 +315,7 @@ func generateFlowObserved(mainCtx context.Context, cfg *config.ClientConfig, mc 
 		if err != nil {
 			if !expectedFlowEnd(flowCtx, err) {
 				observer.dialError()
-				logging.Logger.Warnf("Failed to connect to %s:%d (UDP): %v", cfg.Server, pp.Port, err)
+				flowLogs.udpDial.Warnw("UDP connection failed", "server", cfg.Server, "port", pp.Port, "error", err)
 			}
 			return finishFlow(mainCtx, false)
 		}
@@ -315,7 +327,7 @@ func generateFlowObserved(mainCtx context.Context, cfg *config.ClientConfig, mc 
 			// exceeds the MTU once it exceeds it on every iteration -- retrying
 			// here would busy-loop for the full flow duration instead of
 			// backing off. Fail the whole flow instead.
-			logging.Logger.Warnf("UDP payload size %d exceeds MTU %d, aborting flow", len(payload), cfg.MTU)
+			flowLogs.udpMTU.Warnw("UDP payload exceeds MTU", "payload_bytes", len(payload), "mtu_bytes", cfg.MTU)
 			observer.mtuError()
 			return flowFailed
 		}
@@ -336,7 +348,7 @@ func generateFlowObserved(mainCtx context.Context, cfg *config.ClientConfig, mc 
 					return finishFlow(mainCtx, successful)
 				}
 				observer.writeError()
-				logging.Logger.Warnf("Failed to write to UDP connection: %v", err)
+				flowLogs.udpWrite.Warnw("UDP write failed", "server", cfg.Server, "port", pp.Port, "error", err)
 			} else {
 				mc.IncRequestsSent("udp", pp.portStr)
 				mc.AddBytesSent("udp", pp.portStr, nSent)
@@ -351,17 +363,17 @@ func generateFlowObserved(mainCtx context.Context, cfg *config.ClientConfig, mc 
 					var netErr net.Error
 					if errors.As(readErr, &netErr) && netErr.Timeout() {
 						if flowCtx.Err() == nil && logging.DebugEnabled() {
-							logging.Logger.Debugf("Timeout waiting for UDP response from %s:%d", cfg.Server, pp.Port)
+							flowLogs.udpTimeout.Debugw("UDP response timed out", "server", cfg.Server, "port", pp.Port)
 						}
 					} else if flowCtx.Err() == nil {
 						observer.readError()
-						logging.Logger.Warnf("Failed to read from UDP connection: %v", readErr)
+						flowLogs.udpRead.Warnw("UDP read failed", "server", cfg.Server, "port", pp.Port, "error", readErr)
 					}
 				} else {
 					mc.AddBytesReceived("udp", pp.portStr, nReceived)
 					if nReceived != payloadSize {
 						observer.mismatch()
-						logging.Logger.Warnf("UDP byte mismatch: sent %d bytes, received %d bytes", payloadSize, nReceived)
+						flowLogs.udpMismatch.Warnw("UDP byte mismatch", "server", cfg.Server, "port", pp.Port, "sent", payloadSize, "received", nReceived)
 					} else {
 						successful = true
 						if latencyPending {

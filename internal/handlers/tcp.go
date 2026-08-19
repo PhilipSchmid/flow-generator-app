@@ -6,6 +6,7 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/PhilipSchmid/flow-generator-app/internal/logging"
 	"github.com/PhilipSchmid/flow-generator-app/internal/metrics"
@@ -19,6 +20,14 @@ const tcpReadBufferSize = 1024
 
 var tcpReadBufferPool = sync.Pool{
 	New: func() any { return new([tcpReadBufferSize]byte) },
+}
+
+var tcpFailureLogs = struct {
+	read  *logging.RateLimiter
+	write *logging.RateLimiter
+}{
+	read:  logging.NewRateLimiter(time.Second),
+	write: logging.NewRateLimiter(time.Second),
 }
 
 // TCPHandler handles TCP connections
@@ -78,7 +87,7 @@ func (h *TCPHandler) Handle(conn net.Conn) {
 					h.statusTracker.RecordReadError()
 				}
 				if logging.DebugEnabled() {
-					logging.Logger.Debugf("TCP connection from %s closed: %v", conn.RemoteAddr(), err)
+					tcpFailureLogs.read.Debugw("TCP connection read failed", "remote", conn.RemoteAddr(), "error", err)
 				}
 			}
 			return
@@ -94,7 +103,7 @@ func (h *TCPHandler) Handle(conn net.Conn) {
 					h.statusTracker.RecordWriteError()
 				}
 				if logging.DebugEnabled() {
-					logging.Logger.Debugf("Failed to write to TCP connection from %s: %v", conn.RemoteAddr(), writeErr)
+					tcpFailureLogs.write.Debugw("TCP connection write failed", "remote", conn.RemoteAddr(), "error", writeErr)
 				}
 				return
 			}

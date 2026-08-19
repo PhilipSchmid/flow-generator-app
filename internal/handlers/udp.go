@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"strconv"
+	"time"
 
 	"github.com/PhilipSchmid/flow-generator-app/internal/logging"
 	"github.com/PhilipSchmid/flow-generator-app/internal/metrics"
@@ -14,6 +15,14 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
+
+var udpFailureLogs = struct {
+	read  *logging.RateLimiter
+	write *logging.RateLimiter
+}{
+	read:  logging.NewRateLimiter(time.Second),
+	write: logging.NewRateLimiter(time.Second),
+}
 
 // UDPHandler handles UDP packets
 type UDPHandler struct {
@@ -45,7 +54,7 @@ func (h *UDPHandler) Handle(conn *net.UDPConn) {
 				if h.statusTracker != nil {
 					h.statusTracker.RecordReadError()
 				}
-				logging.Logger.Warnf("UDP read failed on port %s: %v", portStr, err)
+				udpFailureLogs.read.Warnw("UDP listener read failed", "port", portStr, "error", err)
 			}
 			return
 		}
@@ -77,7 +86,7 @@ func (h *UDPHandler) Handle(conn *net.UDPConn) {
 				packetSpan.End()
 			}
 			if logging.DebugEnabled() {
-				logging.Logger.Debugf("Failed to write UDP packet to %s: %v", addr, err)
+				udpFailureLogs.write.Debugw("UDP response write failed", "remote", addr, "error", err)
 			}
 			continue
 		}

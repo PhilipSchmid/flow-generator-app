@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/PhilipSchmid/flow-generator-app/internal/handlers"
 	"github.com/PhilipSchmid/flow-generator-app/internal/logging"
 	statusmetrics "github.com/PhilipSchmid/flow-generator-app/internal/status"
 )
+
+var tcpAcceptLogs = logging.NewRateLimiter(time.Second)
 
 // TCPServer represents a TCP server
 type TCPServer struct {
@@ -98,7 +101,7 @@ func (s *TCPServer) acceptConnections() {
 				if s.statusTracker != nil {
 					s.statusTracker.RecordAcceptError()
 				}
-				logging.Logger.Errorf("Failed to accept TCP connection: %v", err)
+				tcpAcceptLogs.Errorw("TCP connection accept failed", "port", s.port, "error", err)
 				continue
 			}
 		}

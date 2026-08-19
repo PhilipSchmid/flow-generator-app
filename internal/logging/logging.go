@@ -3,6 +3,8 @@ package logging
 import (
 	"os"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -11,6 +13,72 @@ import (
 // Logger is always safe to use. InitLogger replaces the no-op logger during
 // application startup.
 var Logger = zap.NewNop().Sugar()
+
+// RateLimiter bounds repeated log events without dropping their metrics. Each
+// instance is intended for one stable operation such as a TCP dial or UDP read.
+type RateLimiter struct {
+	intervalNanos int64
+	nextLog       atomic.Int64
+	suppressed    atomic.Uint64
+}
+
+// NewRateLimiter creates a limiter that emits at most one event per interval.
+func NewRateLimiter(interval time.Duration) *RateLimiter {
+	if interval <= 0 {
+		interval = time.Second
+	}
+	return &RateLimiter{intervalNanos: int64(interval)}
+}
+
+// Warnw logs a rate-limited warning with structured context.
+func (l *RateLimiter) Warnw(message string, fields ...any) {
+	l.logw(zap.WarnLevel, message, fields...)
+}
+
+// Errorw logs a rate-limited error with structured context.
+func (l *RateLimiter) Errorw(message string, fields ...any) {
+	l.logw(zap.ErrorLevel, message, fields...)
+}
+
+// Debugw logs a rate-limited debug event with structured context.
+func (l *RateLimiter) Debugw(message string, fields ...any) {
+	l.logw(zap.DebugLevel, message, fields...)
+}
+
+func (l *RateLimiter) logw(level zapcore.Level, message string, fields ...any) {
+	if l == nil || Logger == nil || !Logger.Desugar().Core().Enabled(level) {
+		return
+	}
+	suppressed, allowed := l.allowAt(time.Now())
+	if !allowed {
+		return
+	}
+	if suppressed > 0 {
+		fields = append(fields, "suppressed", suppressed)
+	}
+	switch level {
+	case zap.DebugLevel:
+		Logger.Debugw(message, fields...)
+	case zap.WarnLevel:
+		Logger.Warnw(message, fields...)
+	case zap.ErrorLevel:
+		Logger.Errorw(message, fields...)
+	}
+}
+
+func (l *RateLimiter) allowAt(now time.Time) (uint64, bool) {
+	nowNanos := now.UnixNano()
+	for {
+		next := l.nextLog.Load()
+		if nowNanos < next {
+			l.suppressed.Add(1)
+			return 0, false
+		}
+		if l.nextLog.CompareAndSwap(next, nowNanos+l.intervalNanos) {
+			return l.suppressed.Swap(0), true
+		}
+	}
+}
 
 // getLogLevel converts a string level to a zapcore.Level
 func getLogLevel(level string) zapcore.Level {
