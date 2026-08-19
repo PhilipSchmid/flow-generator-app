@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"math"
 	"os"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/spf13/pflag"
@@ -113,6 +115,17 @@ func TestCommonConfigValidate(t *testing.T) {
 			wantErr: true,
 			errMsg:  "status_port and metrics_port must be different",
 		},
+		{
+			name: "zero-padded status and metrics ports conflict",
+			config: CommonConfig{
+				LogLevel:    "info",
+				LogFormat:   "json",
+				MetricsPort: "09190",
+				StatusPort:  "9190",
+			},
+			wantErr: true,
+			errMsg:  "status_port and metrics_port must be different",
+		},
 	}
 
 	for _, tt := range tests {
@@ -153,6 +166,17 @@ func TestClientConfigValidate(t *testing.T) {
 				MSS:           1460,
 			},
 			wantErr: false,
+		},
+		{
+			name: "too many combined ports",
+			config: ClientConfig{
+				CommonConfig: CommonConfig{LogLevel: "info", LogFormat: "json"},
+				Server:       "localhost", Rate: 10, MaxConcurrent: 100, Protocol: "both",
+				MinDuration: 1, MaxDuration: 10, TCPPorts: numberedPorts(1, MaxPorts),
+				UDPPorts: strconv.Itoa(MaxPorts + 1), MTU: 1500, MSS: 1460,
+			},
+			wantErr: true,
+			errMsg:  "cannot contain more than 256 ports combined",
 		},
 		{
 			name: "empty server",
@@ -426,6 +450,24 @@ func TestServerConfigValidate(t *testing.T) {
 			errMsg:  "metrics_port conflicts with tcp_ports_server",
 		},
 		{
+			name: "zero-padded metrics and TCP ports conflict",
+			config: ServerConfig{
+				CommonConfig:   CommonConfig{LogLevel: "info", LogFormat: "json", MetricsPort: "08080"},
+				TCPPortsServer: "8080", HealthPort: "8082",
+			},
+			wantErr: true,
+			errMsg:  "metrics_port conflicts with tcp_ports_server",
+		},
+		{
+			name: "too many combined ports",
+			config: ServerConfig{
+				CommonConfig:   CommonConfig{LogLevel: "info", LogFormat: "json"},
+				TCPPortsServer: numberedPorts(1, MaxPorts), UDPPortsServer: strconv.Itoa(MaxPorts + 1),
+			},
+			wantErr: true,
+			errMsg:  "cannot contain more than 256 ports combined",
+		},
+		{
 			name: "health and TCP ports conflict",
 			config: ServerConfig{
 				CommonConfig: CommonConfig{
@@ -493,6 +535,14 @@ func TestServerConfigValidate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func numberedPorts(start, count int) string {
+	ports := make([]string, count)
+	for i := range ports {
+		ports[i] = strconv.Itoa(start + i)
+	}
+	return strings.Join(ports, ",")
 }
 
 func TestLoadClientConfig(t *testing.T) {
