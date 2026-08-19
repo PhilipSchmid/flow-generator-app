@@ -78,16 +78,16 @@ func (c *Checker) Start(port string) error {
 		return fmt.Errorf("listen on health port %s: %w", port, err)
 	}
 	c.listener = listener
+	c.SetHealthy(true)
 
 	go func() {
 		if err := c.server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			c.SetHealthy(false)
+			c.SetReady(false)
 			logging.Logger.Errorf("Health check server stopped unexpectedly: %v", err)
 		}
 	}()
 	logging.Logger.Infof("Health checks available on %s", listener.Addr())
-
-	// Mark as healthy immediately after starting
-	c.SetHealthy(true)
 
 	return nil
 }
