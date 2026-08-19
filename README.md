@@ -169,7 +169,7 @@ In constant mode, each flow lasts `max-concurrent / rate` seconds. The example t
 
 ### Terminal Dashboard
 
-`make build` creates `bin/dashboard`, and both container images include `/dashboard`. It reads a loopback-only status endpoint from the running client or server, so it works in the existing scratch images without a shell:
+`make build` creates `bin/dashboard`; both container images include `/dashboard`. It reads the running process through its loopback status endpoint:
 
 ```bash
 # Local source build
@@ -184,9 +184,7 @@ docker exec -it echo-server /dashboard
 docker exec -it flow-generator /dashboard
 ```
 
-The heading shows the process role, version, uptime, sample age, health, and active configuration. The client view adds scheduled, started, and capacity-skipped flow rates, concurrency headroom, flow outcomes, payload throughput, protocol and port activity, and sampled echo latency. Payload is shown as one bidirectional I/O rate while TX and RX are balanced; a sustained difference reveals and highlights both directions and their gap. The server view shows request activity, active TCP connections, and unique active TCP client IPs. UDP is connectionless, so UDP senders are represented by packet and port activity instead of a connected-client count.
-
-The dashboard keeps 1-, 5-, and 15-minute averages visible. Charts use the selected time window and an auto-scaled Y-axis. The flow chart labels the configured target and marks it with a dashed line; the table provides exact percentiles. Active errors appear as a five-second rolling rate; cumulative counters are labeled as lifetime errors. Monitor-style shortcuts are also shown in the footer:
+The client view shows flow rate, capacity, payload I/O, failures, latency, and port activity. The server view shows request activity, active TCP connections, and unique TCP client IPs. Charts cover 1, 5, or 15 minutes with rolling averages and p50/p90/p95/p99 statistics. Balanced payload uses one I/O value; TX/RX differences are highlighted. Recent error rates and lifetime totals are kept separate.
 
 | Key | Action |
 |-----|--------|
@@ -196,15 +194,13 @@ The dashboard keeps 1-, 5-, and 15-minute averages visible. Charts use the selec
 | `?`, `F1` | Toggle dashboard help |
 | `q`, `F10` | Leave the dashboard; the monitored process keeps running |
 
-Latency sampling is capped at roughly 1,000 flows per second. TCP measures its echo; UDP measures the first successful echo in a sampled flow rather than timing every packet. The dashboard reports p50, p90, p95, and p99 when enough samples exist.
-
-The dashboard auto-detects the default local endpoints. For a custom status port, pass the full loopback URL:
+Default endpoints are detected automatically. For a custom status port:
 
 ```bash
 /dashboard --endpoint http://127.0.0.1:9291
 ```
 
-Use `--color=auto`, `always`, or `never`; `auto` also honors `NO_COLOR`. The light/dark palette distinguishes TCP, UDP, transmit, receive, healthy, capacity-limited, and failed states without relying on color alone. The status listener accepts only local GET requests, exposes no credentials, and can be disabled with `--status-port=0`.
+Use `--color=auto`, `always`, or `never`; `auto` honors `NO_COLOR`. Latency sampling is capped near 1,000 flows/s. Disable the local-only status endpoint with `--status-port=0`.
 
 ### Health Checks
 
