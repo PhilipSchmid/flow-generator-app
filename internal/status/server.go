@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/PhilipSchmid/flow-generator-app/internal/logging"
@@ -35,11 +37,21 @@ func startAt(address string, provider Provider) (*Server, error) {
 	if provider == nil {
 		return nil, errors.New("status provider is required")
 	}
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		return nil, fmt.Errorf("listen on local status address %s: %w", address, err)
+	}
+	listenerPort := listener.Addr().(*net.TCPAddr).Port
 	mux := http.NewServeMux()
 	mux.HandleFunc(Path, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		if !localStatusRequest(r, listenerPort) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -58,10 +70,6 @@ func startAt(address string, provider Provider) (*Server, error) {
 		IdleTimeout:       30 * time.Second,
 		MaxHeaderBytes:    8 << 10,
 	}
-	listener, err := net.Listen("tcp", address)
-	if err != nil {
-		return nil, fmt.Errorf("listen on local status address %s: %w", address, err)
-	}
 	server := &Server{httpServer: httpServer, listener: listener}
 	go func() {
 		if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -70,6 +78,22 @@ func startAt(address string, provider Provider) (*Server, error) {
 	}()
 	logging.Logger.Infof("Local dashboard status available on %s%s", listener.Addr(), Path)
 	return server, nil
+}
+
+func localStatusRequest(r *http.Request, listenerPort int) bool {
+	host, portText, err := net.SplitHostPort(r.Host)
+	if err != nil || portText != strconv.Itoa(listenerPort) {
+		return false
+	}
+	ip := net.ParseIP(host)
+	if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		return false
+	}
+	if r.Header.Get("Origin") == "" {
+		return true
+	}
+	origin, err := url.Parse(r.Header.Get("Origin"))
+	return err == nil && origin.Scheme == "http" && origin.Host == r.Host && origin.Path == "" && origin.RawQuery == "" && origin.Fragment == ""
 }
 
 func (s *Server) Addr() net.Addr {
