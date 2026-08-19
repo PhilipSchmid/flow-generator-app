@@ -52,10 +52,14 @@ func TestServerClientIntegration(t *testing.T) {
 	}
 
 	// Find available ports
-	tcpPort := findAvailablePort(t)
+	usedPorts := make(map[int]struct{})
+	tcpPort := findUniqueSentinelPort(t, usedPorts)
+	usedPorts[tcpPort] = struct{}{}
 	udpPort := findAvailableUDPPort(t)
-	metricsPort := findAvailablePort(t)
-	healthPort := findAvailablePort(t)
+	metricsPort := findUniqueSentinelPort(t, usedPorts)
+	usedPorts[metricsPort] = struct{}{}
+	healthPort := findUniqueSentinelPort(t, usedPorts)
+	usedPorts[healthPort] = struct{}{}
 
 	// Build server and client binaries
 	serverBinary := "./test-server"
@@ -96,7 +100,8 @@ func TestServerClientIntegration(t *testing.T) {
 
 	// Test TCP client
 	t.Run("TCP Client", func(t *testing.T) {
-		clientMetricsPort := findAvailablePort(t)
+		clientMetricsPort := findUniqueSentinelPort(t, usedPorts)
+		usedPorts[clientMetricsPort] = struct{}{}
 		clientCmd := exec.Command(clientBinary,
 			"--server", "127.0.0.1",
 			"--tcp-ports", fmt.Sprintf("%d", tcpPort),
@@ -117,7 +122,8 @@ func TestServerClientIntegration(t *testing.T) {
 
 	// Test UDP client
 	t.Run("UDP Client with legacy flag names", func(t *testing.T) {
-		clientMetricsPort := findAvailablePort(t)
+		clientMetricsPort := findUniqueSentinelPort(t, usedPorts)
+		usedPorts[clientMetricsPort] = struct{}{}
 		clientCmd := exec.Command(clientBinary,
 			"--server", "127.0.0.1",
 			"--udp_ports", fmt.Sprintf("%d", udpPort),
@@ -159,9 +165,12 @@ func TestServerTCPEcho(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	tcpPort := findAvailablePort(t)
-	healthPort := findAvailablePort(t)
-	metricsPort := findAvailablePort(t)
+	usedPorts := make(map[int]struct{})
+	tcpPort := findUniqueSentinelPort(t, usedPorts)
+	usedPorts[tcpPort] = struct{}{}
+	healthPort := findUniqueSentinelPort(t, usedPorts)
+	usedPorts[healthPort] = struct{}{}
+	metricsPort := findUniqueSentinelPort(t, usedPorts)
 	serverBinary := "./test-server-tcp"
 
 	// Build server
@@ -210,8 +219,10 @@ func TestServerUDPEcho(t *testing.T) {
 	}
 
 	udpPort := findAvailableUDPPort(t)
-	healthPort := findAvailablePort(t)
-	metricsPort := findAvailablePort(t)
+	usedPorts := make(map[int]struct{})
+	healthPort := findUniqueSentinelPort(t, usedPorts)
+	usedPorts[healthPort] = struct{}{}
+	metricsPort := findUniqueSentinelPort(t, usedPorts)
 	serverBinary := "./test-server-udp"
 
 	// Build server
@@ -261,12 +272,17 @@ func TestMultipleFlows(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	tcpPort1 := findAvailablePort(t)
-	tcpPort2 := findAvailablePort(t)
+	usedPorts := make(map[int]struct{})
+	tcpPort1 := findUniqueSentinelPort(t, usedPorts)
+	usedPorts[tcpPort1] = struct{}{}
+	tcpPort2 := findUniqueSentinelPort(t, usedPorts)
+	usedPorts[tcpPort2] = struct{}{}
 	udpPort1 := findAvailableUDPPort(t)
-	healthPort := findAvailablePort(t)
-	metricsPort := findAvailablePort(t)
-	clientMetricsPort := findAvailablePort(t)
+	healthPort := findUniqueSentinelPort(t, usedPorts)
+	usedPorts[healthPort] = struct{}{}
+	metricsPort := findUniqueSentinelPort(t, usedPorts)
+	usedPorts[metricsPort] = struct{}{}
+	clientMetricsPort := findUniqueSentinelPort(t, usedPorts)
 	serverBinary := "./test-server-multi"
 	clientBinary := "./test-client-multi"
 
@@ -339,9 +355,12 @@ func BenchmarkTCPFlow(b *testing.B) {
 	require.NoError(b, err)
 	tcpPort := listener.Addr().(*net.TCPAddr).Port
 	_ = listener.Close()
-	metricsPort := findAvailablePort(b)
-	healthPort := findAvailablePort(b)
-	clientMetricsPort := findAvailablePort(b)
+	usedPorts := map[int]struct{}{tcpPort: {}}
+	metricsPort := findUniqueSentinelPort(b, usedPorts)
+	usedPorts[metricsPort] = struct{}{}
+	healthPort := findUniqueSentinelPort(b, usedPorts)
+	usedPorts[healthPort] = struct{}{}
+	clientMetricsPort := findUniqueSentinelPort(b, usedPorts)
 	serverBinary := "./bench-server"
 	clientBinary := "./bench-client"
 

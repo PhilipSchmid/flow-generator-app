@@ -373,7 +373,7 @@ func sentinelPorts(args []string) map[int]struct{} {
 	return ports
 }
 
-func findUniqueSentinelPort(t *testing.T, used map[int]struct{}) int {
+func findUniqueSentinelPort(t testing.TB, used map[int]struct{}) int {
 	t.Helper()
 	for range 20 {
 		port := findAvailablePort(t)
