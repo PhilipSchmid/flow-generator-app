@@ -89,7 +89,6 @@ jobs:
         uses: securego/gosec@master
         with:
           args: '-fmt sarif -out gosec-results.sarif -severity medium ./...'
-        continue-on-error: true
 
       - name: Upload gosec scan results
         uses: github/codeql-action/upload-sarif@v4
