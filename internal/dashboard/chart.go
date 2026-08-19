@@ -205,6 +205,13 @@ func (c brailleCanvas) render() string {
 }
 
 func chartBounds(values []float64, reference float64) (float64, float64) {
+	if len(values) == 0 {
+		maximum := reference
+		if maximum <= 0 {
+			maximum = 1
+		}
+		return 0, maximum
+	}
 	minimum, maximum := values[0], values[0]
 	for _, value := range values[1:] {
 		if value < minimum {

@@ -183,7 +183,7 @@ docker exec -it flow-generator /dashboard
 
 The heading shows the process role, version, uptime, sample age, health, and active configuration. The client view adds target attainment, concurrency headroom, flow outcomes, payload throughput, protocol and port activity, and sampled echo latency. The server view shows request activity, active TCP connections, and unique active TCP client IPs. UDP is connectionless, so UDP senders are represented by packet and port activity instead of a connected-client count.
 
-The dashboard keeps 1-, 5-, and 15-minute averages visible. Charts use a fixed horizontal time scale and auto-scale vertically so small changes remain visible; the dashed flow-rate line marks the configured target, and the table provides exact percentiles. Monitor-style shortcuts are also shown in the footer:
+The dashboard keeps 1-, 5-, and 15-minute averages visible. Charts label the selected time window and auto-scaled vertical range; the dashed flow-rate line marks the configured target, and the table provides exact percentiles. Monitor-style shortcuts are also shown in the footer:
 
 | Key | Action |
 |-----|--------|
