@@ -146,6 +146,22 @@ func TestTimeAxisLabelsSelectedWindow(t *testing.T) {
 	assert.True(t, strings.HasSuffix(axis, "now"))
 }
 
+func TestTimeRangeSelectorUsesSegmentedTabs(t *testing.T) {
+	model := Model{windowIndex: 1}
+	colors := newPalette(true, false)
+	wide := model.windowSelector(colors, 200)
+	assert.Contains(t, wide, "TIME RANGE")
+	assert.Contains(t, wide, "‹")
+	assert.Contains(t, wide, "1 MIN")
+	assert.Contains(t, wide, "5 MIN")
+	assert.Contains(t, wide, "15 MIN")
+	assert.Contains(t, wide, "›")
+
+	compact := model.windowSelector(colors, 100)
+	assert.Contains(t, compact, "1m")
+	assert.NotContains(t, compact, "1 MIN")
+}
+
 func TestChartBoundsHandleEmptyHistory(t *testing.T) {
 	minimum, maximum := chartBounds(nil, 100)
 	assert.Zero(t, minimum)
