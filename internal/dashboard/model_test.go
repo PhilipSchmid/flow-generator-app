@@ -25,6 +25,11 @@ func TestMonitorShortcuts(t *testing.T) {
 	assert.True(t, model.paused)
 	model = updateWithKey(t, model, tea.Key{Code: tea.KeyF1})
 	assert.True(t, model.showHelp)
+	model = updateWithKey(t, model, tea.Key{Code: tea.KeyRight})
+	assert.Equal(t, len(windows)-1, model.windowIndex, "help modal should capture navigation keys")
+	model = updateWithKey(t, model, tea.Key{Code: tea.KeyEscape})
+	assert.False(t, model.showHelp)
+	model = updateWithKey(t, model, tea.Key{Code: tea.KeyF1})
 
 	_, quit := model.Update(tea.KeyPressMsg(tea.Key{Text: "q", Code: 'q'}))
 	assert.NotNil(t, quit)
