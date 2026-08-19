@@ -454,8 +454,8 @@ func timeAxis(width int, window time.Duration) string {
 				continue
 			}
 			labelWidth := len([]rune(label.text))
-			start := label.position - (labelWidth-1)/2
-			if axisLabelFits(occupied, start, labelWidth) {
+			preferred := label.position - (labelWidth-1)/2
+			if start, ok := axisLabelStart(occupied, preferred, labelWidth); ok {
 				placeAxisLabel(axis, label.text, start)
 				markAxisLabel(occupied, start, labelWidth)
 			}
@@ -511,6 +511,15 @@ func axisLabelFits(occupied []bool, start, width int) bool {
 		}
 	}
 	return true
+}
+
+func axisLabelStart(occupied []bool, preferred, width int) (int, bool) {
+	for _, start := range []int{preferred, preferred + 1, preferred - 1} {
+		if axisLabelFits(occupied, start, width) {
+			return start, true
+		}
+	}
+	return 0, false
 }
 
 func markAxisLabel(occupied []bool, start, width int) {
