@@ -214,7 +214,7 @@ mod-tidy:
 clean:
 	@printf "$(BLUE)Cleaning build artifacts...$(NC)\n"
 	@rm -rf $(BIN_DIR) $(COVERAGE_DIR)
-	@rm -f echo-server flow-generator
+	@rm -f echo-server flow-generator dashboard
 	@printf "$(GREEN)✓ Build artifacts cleaned$(NC)\n"
 
 ## docker-build: Build Docker images
@@ -310,6 +310,11 @@ quick-test: build
 		CLIENT_PID=$$!; \
 		printf "$(YELLOW)Running for 10 seconds...$(NC)\n"; \
 		sleep 10; \
+		if ! curl -fsS http://127.0.0.1:9092/metrics > /tmp/flow-generator.metrics || \
+			! curl -fsS http://127.0.0.1:9091/metrics > /tmp/echo-server.metrics; then \
+			printf "$(RED)✗ Failed to read smoke-test metrics$(NC)\n"; \
+			exit 1; \
+		fi; \
 		printf "$(YELLOW)Stopping processes...$(NC)\n"; \
 		kill "$$CLIENT_PID"; \
 		wait "$$CLIENT_PID"; \
@@ -326,9 +331,9 @@ quick-test: build
 		printf "  • Flow duration: 1-5 seconds\n"; \
 		printf "  • Metrics port: 9092\n"; \
 		printf "\n$(YELLOW)Test Results:$(NC)\n"; \
-		REQUESTS_SENT=$$(grep -oE "Total Requests Sent.*│\s*[0-9]+" /tmp/flow-generator.log 2>/dev/null | grep -oE "[0-9]+$$" | tail -1 || echo "0"); \
-		TCP_SENT=$$(grep -oE "Total TCP Requests Sent.*│\s*[0-9]+" /tmp/flow-generator.log 2>/dev/null | grep -oE "[0-9]+$$" | tail -1 || echo "0"); \
-		UDP_SENT=$$(grep -oE "Total UDP Requests Sent.*│\s*[0-9]+" /tmp/flow-generator.log 2>/dev/null | grep -oE "[0-9]+$$" | tail -1 || echo "0"); \
+		REQUESTS_SENT=$$(awk '$$1 ~ /^requests_sent_total\{/ { sum += $$2 } END { printf "%.0f", sum }' /tmp/flow-generator.metrics); \
+		TCP_SENT=$$(awk '$$1 ~ /^requests_sent_total\{/ && $$1 ~ /protocol="tcp"/ { sum += $$2 } END { printf "%.0f", sum }' /tmp/flow-generator.metrics); \
+		UDP_SENT=$$(awk '$$1 ~ /^requests_sent_total\{/ && $$1 ~ /protocol="udp"/ { sum += $$2 } END { printf "%.0f", sum }' /tmp/flow-generator.metrics); \
 		REQUESTS_SENT=$${REQUESTS_SENT:-0}; \
 		TCP_SENT=$${TCP_SENT:-0}; \
 		UDP_SENT=$${UDP_SENT:-0}; \
@@ -344,7 +349,7 @@ quick-test: build
 		fi; \
 		if grep -q "Echo server is ready" /tmp/echo-server.log 2>/dev/null; then \
 			printf "$(GREEN)✓ Server started and ready$(NC)\n"; \
-			REQUESTS_RECEIVED=$$(grep -oE "Total Requests Received.*│\s*[0-9]+" /tmp/echo-server.log 2>/dev/null | grep -oE "[0-9]+$$" | tail -1); \
+			REQUESTS_RECEIVED=$$(awk '$$1 ~ /^requests_received_total\{/ { sum += $$2 } END { printf "%.0f", sum }' /tmp/echo-server.metrics); \
 			if [ -n "$$REQUESTS_RECEIVED" ] && [ "$$REQUESTS_RECEIVED" -gt 0 ] 2>/dev/null; then \
 				printf "  • Echo server processed: $$REQUESTS_RECEIVED requests\n"; \
 			fi; \
