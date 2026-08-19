@@ -2,6 +2,7 @@ package status
 
 import (
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,10 +24,10 @@ func TestLatencyBucketsAreMonotonic(t *testing.T) {
 }
 
 func TestClientTrackerSnapshot(t *testing.T) {
-	tracker := NewClientTracker(2500, []PortFlowSnapshot{{Protocol: "tcp", Port: 8080}})
-	assert.False(t, tracker.FlowStarted(0))
-	assert.False(t, tracker.FlowStarted(0))
+	tracker := NewClientTracker([]PortFlowSnapshot{{Protocol: "tcp", Port: 8080}})
 	assert.True(t, tracker.FlowStarted(0))
+	tracker.FlowStarted(0)
+	tracker.FlowStarted(0)
 	tracker.FlowCompleted()
 	tracker.FlowCanceled()
 	tracker.FlowFailed(0)
@@ -51,8 +52,40 @@ func TestClientTrackerSnapshot(t *testing.T) {
 	assert.Equal(t, uint64(2*time.Millisecond), snapshot.TCPLatency.SumNanos)
 }
 
+func TestClientTrackerLatencySamplingUsesElapsedTime(t *testing.T) {
+	tracker := NewClientTracker(nil)
+	now := int64(time.Second)
+	assert.True(t, tracker.sampleLatencyAt(now))
+	assert.False(t, tracker.sampleLatencyAt(now+int64(latencySamplePeriod)-1))
+	assert.True(t, tracker.sampleLatencyAt(now+int64(latencySamplePeriod)))
+}
+
+func TestLatencySnapshotIsInternallyConsistentDuringUpdates(t *testing.T) {
+	var histogram latencyHistogram
+	var writers sync.WaitGroup
+	writers.Add(1)
+	go func() {
+		defer writers.Done()
+		for range 10_000 {
+			histogram.observe(time.Microsecond)
+		}
+	}()
+	for range 1_000 {
+		snapshot := histogram.snapshot()
+		var count uint64
+		for _, bucket := range snapshot.Buckets {
+			count += bucket
+		}
+		assert.Equal(t, count, snapshot.Count)
+		if snapshot.Count > 0 {
+			assert.Greater(t, snapshot.SumNanos, uint64(0))
+		}
+	}
+	writers.Wait()
+}
+
 func TestClientTrackerIgnoresUnknownPortIndex(t *testing.T) {
-	tracker := NewClientTracker(1, nil)
+	tracker := NewClientTracker(nil)
 	assert.NotPanics(t, func() {
 		tracker.FlowStarted(-1)
 		tracker.FlowFailed(42)
@@ -75,7 +108,7 @@ func TestServerTrackerCountsUniqueActiveTCPClientIPs(t *testing.T) {
 }
 
 func BenchmarkClientTrackerFlowLifecycle(b *testing.B) {
-	tracker := NewClientTracker(10_000, []PortFlowSnapshot{{Protocol: "tcp", Port: 8080}})
+	tracker := NewClientTracker([]PortFlowSnapshot{{Protocol: "tcp", Port: 8080}})
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -86,7 +119,7 @@ func BenchmarkClientTrackerFlowLifecycle(b *testing.B) {
 }
 
 func BenchmarkClientTrackerSnapshot(b *testing.B) {
-	tracker := NewClientTracker(10_000, []PortFlowSnapshot{
+	tracker := NewClientTracker([]PortFlowSnapshot{
 		{Protocol: "tcp", Port: 8080},
 		{Protocol: "udp", Port: 9000},
 	})

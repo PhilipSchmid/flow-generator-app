@@ -205,7 +205,7 @@ func TestGenerateFlow(t *testing.T) {
 
 	ctx := context.Background()
 	pp := newProtocolPort("127.0.0.1", "tcp", serverAddr.Port)
-	tracker := statusapi.NewClientTracker(1, []statusapi.PortFlowSnapshot{{Protocol: "tcp", Port: serverAddr.Port}})
+	tracker := statusapi.NewClientTracker([]statusapi.PortFlowSnapshot{{Protocol: "tcp", Port: serverAddr.Port}})
 	sample := tracker.FlowStarted(0)
 	outcome := generateFlowObserved(ctx, testCfg, mc, pp, 0.1, flowObserver{tracker: tracker, sampleLatency: sample})
 	assert.Equal(t, flowCompleted, outcome)
@@ -349,7 +349,7 @@ func TestGenerateFlowStopsWhenParentIsCanceled(t *testing.T) {
 
 func TestGenerateUDPFlowRecordsMTUFailure(t *testing.T) {
 	cfg := &config.ClientConfig{Server: "127.0.0.1", PayloadSize: 100, MTU: 50, MSS: 40}
-	tracker := statusapi.NewClientTracker(1, []statusapi.PortFlowSnapshot{{Protocol: "udp", Port: 9000}})
+	tracker := statusapi.NewClientTracker([]statusapi.PortFlowSnapshot{{Protocol: "udp", Port: 9000}})
 	tracker.FlowStarted(0)
 	outcome := generateFlowObserved(context.Background(), cfg, metrics.NewMetricsCollector(), newProtocolPort("127.0.0.1", "udp", 9000), 1, flowObserver{tracker: tracker})
 	assert.Equal(t, flowFailed, outcome)
@@ -360,7 +360,7 @@ func TestGenerateUDPFlowRecordsMTUFailure(t *testing.T) {
 }
 
 func TestRunFlowSchedulerTracksCapacitySkips(t *testing.T) {
-	tracker := statusapi.NewClientTracker(10_000, nil)
+	tracker := statusapi.NewClientTracker(nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 	runFlowSchedulerTracked(ctx, 100_000, 1, 0, func(context.Context) { time.Sleep(20 * time.Millisecond) }, tracker)
@@ -377,7 +377,7 @@ func TestGenerateFlowDoesNotWarnAfterCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	for _, protocol := range []string{"tcp", "udp"} {
-		tracker := statusapi.NewClientTracker(1, nil)
+		tracker := statusapi.NewClientTracker(nil)
 		generateFlowObserved(ctx, cfg, metrics.NewMetricsCollector(), newProtocolPort("unresolvable.invalid", protocol, 1), 10, flowObserver{tracker: tracker})
 		assert.Equal(t, statusapi.ErrorCounts{}, tracker.Snapshot().Errors)
 	}
