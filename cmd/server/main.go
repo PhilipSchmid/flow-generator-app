@@ -86,7 +86,10 @@ func main() {
 
 	// Initialize MetricsCollector
 	mc := metrics.NewMetricsCollector()
-	statusTracker := &statusapi.ServerTracker{}
+	var statusTracker *statusapi.ServerTracker
+	if cfg.StatusPort != "0" {
+		statusTracker = &statusapi.ServerTracker{}
+	}
 
 	// Initialize tracing if enabled
 	if cfg.TracingEnabled {
@@ -145,32 +148,35 @@ func main() {
 	healthChecker.SetReady(true)
 	logging.Logger.Info("Echo server is ready")
 
-	statusServer, err := statusapi.Start(cfg.StatusPort, func() statusapi.Snapshot {
-		state := "not_ready"
-		if healthChecker.Ready() {
-			state = "ready"
+	var statusServer *statusapi.Server
+	if statusTracker != nil {
+		statusServer, err = statusapi.Start(cfg.StatusPort, func() statusapi.Snapshot {
+			state := "not_ready"
+			if healthChecker.Ready() {
+				state = "ready"
+			}
+			return statusapi.Snapshot{
+				SchemaVersion: statusapi.SchemaVersion,
+				Role:          "server",
+				Version:       version.Short(),
+				SampledAt:     time.Now().UTC(),
+				StartedAt:     startedAt,
+				State:         state,
+				Configuration: statusapi.Configuration{
+					TCPPorts: tcpPorts, UDPPorts: udpPorts,
+					HealthPort: cfg.HealthPort, MetricsPort: cfg.MetricsPort,
+					TracingEnabled: cfg.TracingEnabled,
+				},
+				Traffic: mc.Snapshot(),
+				Server: &statusapi.ServerSnapshot{
+					Ready: healthChecker.Ready(), Healthy: healthChecker.Healthy(),
+					ActiveTCPClients: statusTracker.ActiveTCPClients(), Errors: statusTracker.Errors(),
+				},
+			}
+		})
+		if err != nil {
+			logging.Logger.Fatalf("Failed to start local dashboard status: %v", err)
 		}
-		return statusapi.Snapshot{
-			SchemaVersion: statusapi.SchemaVersion,
-			Role:          "server",
-			Version:       version.Short(),
-			SampledAt:     time.Now().UTC(),
-			StartedAt:     startedAt,
-			State:         state,
-			Configuration: statusapi.Configuration{
-				TCPPorts: tcpPorts, UDPPorts: udpPorts,
-				HealthPort: cfg.HealthPort, MetricsPort: cfg.MetricsPort,
-				TracingEnabled: cfg.TracingEnabled,
-			},
-			Traffic: mc.Snapshot(),
-			Server: &statusapi.ServerSnapshot{
-				Ready: healthChecker.Ready(), Healthy: healthChecker.Healthy(),
-				ActiveTCPClients: statusTracker.ActiveTCPClients(), Errors: statusTracker.Errors(),
-			},
-		}
-	})
-	if err != nil {
-		logging.Logger.Fatalf("Failed to start local dashboard status: %v", err)
 	}
 
 	// Handle termination signals
