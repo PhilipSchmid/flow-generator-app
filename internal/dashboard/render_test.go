@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"image/color"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/PhilipSchmid/flow-generator-app/internal/metrics"
 	statusapi "github.com/PhilipSchmid/flow-generator-app/internal/status"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRenderClientDashboardWithoutColor(t *testing.T) {
@@ -354,6 +356,31 @@ func TestPayloadBalanceRequiresSustainedDifference(t *testing.T) {
 	assert.InDelta(t, 0.5, sustained.Gap, 0.001)
 }
 
+func TestPayloadBalanceUsesElapsedCoverage(t *testing.T) {
+	result := payloadBalanceFor([]sample{
+		{Covered: 100 * time.Millisecond, BytesTX: 100, BytesRX: 50},
+		{Covered: 100 * time.Millisecond, BytesTX: 100, BytesRX: 50},
+		{Covered: 100 * time.Millisecond, BytesTX: 100, BytesRX: 50},
+	})
+	assert.False(t, result.Ready)
+	assert.False(t, result.Diverged)
+}
+
+func TestHealthStatePrefersDraining(t *testing.T) {
+	model := Model{
+		connected: true,
+		snapshot:  &statusapi.Snapshot{State: "draining", Client: &statusapi.ClientSnapshot{}},
+	}
+	state, _ := model.healthState(newPalette(true, false))
+	assert.Equal(t, "DRAINING", state)
+}
+
+func TestFooterDoesNotClaimLiveWhileDisconnected(t *testing.T) {
+	footer := (Model{connected: false}).footer(newPalette(true, false), 120)
+	assert.Contains(t, footer, "● STALE")
+	assert.NotContains(t, footer, "● LIVE")
+}
+
 func TestChartBoundsHandleEmptyHistory(t *testing.T) {
 	minimum, maximum := chartBounds(nil, 100)
 	assert.Zero(t, minimum)
@@ -373,6 +400,48 @@ func TestTimelineSamplesUseTheSelectedWindowScale(t *testing.T) {
 	points = timelineSamples(fullWindow, 120, 60)
 	assert.Equal(t, 0, points[0].x)
 	assert.Equal(t, 119, points[len(points)-1].x)
+}
+
+func TestTimelineSamplesBreakAcrossMissingValues(t *testing.T) {
+	points := timelineSamples([]float64{1, math.NaN(), 2}, 20, 3)
+	require.Len(t, points, 2)
+	assert.False(t, points[1].connect)
+}
+
+func TestChartValuesUseSampleTimestamps(t *testing.T) {
+	end := time.Now().UTC().Truncate(time.Second)
+	series := chartValues([]sample{
+		{At: end.Add(-10 * time.Second), FlowRate: 10},
+		{At: end, FlowRate: 20},
+	}, end, time.Minute, func(sample sample) (float64, bool) { return sample.FlowRate, true })
+	require.Len(t, series, 60)
+	assert.True(t, math.IsNaN(series[0]))
+	assert.Equal(t, float64(10), series[49])
+	assert.Equal(t, float64(20), series[59])
+}
+
+func TestChartValuesKeepEveryRegularWindowSample(t *testing.T) {
+	end := time.Now().UTC().Truncate(time.Second)
+	samples := make([]sample, 60)
+	for index := range samples {
+		samples[index] = sample{At: end.Add(-time.Duration(59-index) * time.Second), FlowRate: float64(index + 1)}
+	}
+	series := chartValues(samples, end, time.Minute, func(sample sample) (float64, bool) { return sample.FlowRate, true })
+	require.Len(t, series, 60)
+	for index, value := range series {
+		assert.Equal(t, float64(index+1), value)
+	}
+}
+
+func TestChartValuesToleratePollingJitter(t *testing.T) {
+	end := time.Now().UTC().Truncate(time.Second)
+	series := chartValues([]sample{
+		{At: end.Add(-1001 * time.Millisecond), FlowRate: 10},
+		{At: end, FlowRate: 20},
+	}, end, time.Minute, func(sample sample) (float64, bool) { return sample.FlowRate, true })
+	require.Len(t, series, 60)
+	assert.Equal(t, float64(10), series[58])
+	assert.Equal(t, float64(20), series[59])
 }
 
 func TestWideDashboardSpacesPercentileColumns(t *testing.T) {

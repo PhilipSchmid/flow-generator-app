@@ -8,8 +8,10 @@ import (
 const sparkBlocks = "▁▂▃▄▅▆▇█"
 
 type traceSample struct {
-	x     int
-	value float64
+	x       int
+	value   float64
+	connect bool
+	count   int
 }
 
 type brailleCanvas struct {
@@ -89,7 +91,11 @@ func lineChart(values []float64, width, height int, reference float64, expectedS
 	canvas.set(previousX, previousY)
 	for _, point := range points[1:] {
 		y := scaleY(point.value)
-		canvas.line(previousX, previousY, point.x, y)
+		if point.connect {
+			canvas.line(previousX, previousY, point.x, y)
+		} else {
+			canvas.set(point.x, y)
+		}
 		previousX, previousY = point.x, y
 	}
 	return canvas.render()
@@ -111,10 +117,11 @@ func timelineSamples(values []float64, width, expectedSamples int) []traceSample
 
 	points := make([]traceSample, 0, minInt(len(values), width))
 	start := expectedSamples - len(values)
-	currentX := -1
-	var sum float64
-	count := 0
+	lastIndex := -1
 	for i, value := range values {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			continue
+		}
 		x := int(math.Round(float64(start+i) * float64(width-1) / float64(expectedSamples-1)))
 		if x < 0 {
 			x = 0
@@ -122,17 +129,16 @@ func timelineSamples(values []float64, width, expectedSamples int) []traceSample
 		if x >= width {
 			x = width - 1
 		}
-		if currentX >= 0 && x != currentX {
-			points = append(points, traceSample{x: currentX, value: sum / float64(count)})
-			sum = 0
-			count = 0
+		connect := lastIndex >= 0 && i-lastIndex == 1
+		if len(points) > 0 && points[len(points)-1].x == x {
+			point := &points[len(points)-1]
+			point.value = (point.value*float64(point.count) + value) / float64(point.count+1)
+			point.count++
+			lastIndex = i
+			continue
 		}
-		currentX = x
-		sum += value
-		count++
-	}
-	if count > 0 {
-		points = append(points, traceSample{x: currentX, value: sum / float64(count)})
+		points = append(points, traceSample{x: x, value: value, connect: connect, count: 1})
+		lastIndex = i
 	}
 	return points
 }
@@ -205,21 +211,24 @@ func (c brailleCanvas) render() string {
 }
 
 func chartBounds(values []float64, reference float64) (float64, float64) {
-	if len(values) == 0 {
-		maximum := reference
-		if maximum <= 0 {
-			maximum = 1
+	minimum, maximum := math.Inf(1), math.Inf(-1)
+	for _, value := range values {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			continue
 		}
-		return 0, maximum
-	}
-	minimum, maximum := values[0], values[0]
-	for _, value := range values[1:] {
 		if value < minimum {
 			minimum = value
 		}
 		if value > maximum {
 			maximum = value
 		}
+	}
+	if math.IsInf(minimum, 1) {
+		maximum := reference
+		if maximum <= 0 {
+			maximum = 1
+		}
+		return 0, maximum
 	}
 	if reference > 0 {
 		if reference < minimum {

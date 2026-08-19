@@ -12,9 +12,9 @@ import (
 )
 
 const (
-	payloadBalanceWindow     = 5 * time.Second
-	payloadBalanceMinSamples = 3
-	payloadBalanceThreshold  = 0.05
+	payloadBalanceWindow      = 5 * time.Second
+	payloadBalanceMinDuration = 3 * time.Second
+	payloadBalanceThreshold   = 0.05
 )
 
 type payloadBalance struct {
@@ -43,14 +43,17 @@ func (m Model) render() string {
 	}
 	snapshot := *m.snapshot
 	window := m.history.window(m.selectedWindow())
-	rateValues := activityValues(window, snapshot.Role)
-	flow := summarize(rateValues)
-	tx := summarize(values(window, func(s sample) float64 { return s.BytesTX * 8 }))
-	rx := summarize(values(window, func(s sample) float64 { return s.BytesRX * 8 }))
-	ioValues := values(window, func(s sample) float64 { return (s.BytesTX + s.BytesRX) * 8 })
-	io := summarize(ioValues)
+	flow := summarizeSamples(window, func(s sample) float64 {
+		if snapshot.Role == "server" {
+			return s.TCPRate + s.UDPRate
+		}
+		return s.FlowRate
+	})
+	tx := summarizeSamples(window, func(s sample) float64 { return s.BytesTX * 8 })
+	rx := summarizeSamples(window, func(s sample) float64 { return s.BytesRX * 8 })
+	io := summarizeSamples(window, func(s sample) float64 { return (s.BytesTX + s.BytesRX) * 8 })
 	payload := payloadBalanceFor(m.history.window(payloadBalanceWindow))
-	active := summarize(values(window, func(s sample) float64 { return s.Active }))
+	active := summarizeSamples(window, func(s sample) float64 { return s.Active })
 	latency, latencyCount := latencySummary(window)
 	state, stateColor := m.healthState(colors)
 
@@ -74,6 +77,19 @@ func (m Model) render() string {
 
 	if width >= 90 && m.height >= 24 {
 		expectedSamples := int(m.selectedWindow() / time.Second)
+		chartEnd := snapshot.SampledAt
+		if !m.connected {
+			chartEnd = time.Now().UTC()
+		}
+		rateChartValues := chartValues(window, chartEnd, m.selectedWindow(), func(sample sample) (float64, bool) {
+			if snapshot.Role == "server" {
+				return sample.TCPRate + sample.UDPRate, true
+			}
+			return sample.FlowRate, true
+		})
+		ioChartValues := chartValues(window, chartEnd, m.selectedWindow(), func(sample sample) (float64, bool) {
+			return (sample.BytesTX + sample.BytesRX) * 8, true
+		})
 		chartWidth := width - 4
 		if width >= 120 {
 			chartWidth = (width - 1) / 2
@@ -97,7 +113,7 @@ func (m Model) render() string {
 			rateTitle = "Flow starts/s"
 			reference = snapshot.Configuration.Rate
 		}
-		flowChart := chartPanel(rateTitle, rateValues, chartWidth, chartHeight, reference, expectedSamples, formatRate(flow.Current), formatFloatRate, colors.primary, colors)
+		flowChart := chartPanel(rateTitle, rateChartValues, chartWidth, chartHeight, reference, expectedSamples, formatRate(flow.Current), formatFloatRate, colors.primary, colors)
 		payloadCurrent := formatBits(io.Current) + " · BALANCED"
 		payloadAccent := colors.tx
 		if !payload.Ready {
@@ -106,16 +122,19 @@ func (m Model) render() string {
 			payloadCurrent = fmt.Sprintf("5s TX %s · RX %s · GAP %.1f%%", formatBits(payload.TX), formatBits(payload.RX), payload.Gap*100)
 			payloadAccent = colors.danger
 		}
-		payloadChart := chartPanel("Payload I/O", ioValues, chartWidth, chartHeight, 0, expectedSamples, payloadCurrent, formatTableBits, payloadAccent, colors)
+		payloadChart := chartPanel("Payload I/O", ioChartValues, chartWidth, chartHeight, 0, expectedSamples, payloadCurrent, formatTableBits, payloadAccent, colors)
 		if width >= 120 {
 			activeTitle := "Active TCP"
 			if snapshot.Role == "client" {
 				activeTitle = "Active flows"
 			}
-			activeChart := chartPanel(activeTitle, values(window, func(s sample) float64 { return s.Active }), chartWidth, chartHeight, 0, expectedSamples, formatFloatCount(active.Current), formatFloatCount, colors.tcp, colors)
+			activeChartValues := chartValues(window, chartEnd, m.selectedWindow(), func(sample sample) (float64, bool) { return sample.Active, true })
+			activeChart := chartPanel(activeTitle, activeChartValues, chartWidth, chartHeight, 0, expectedSamples, formatFloatCount(active.Current), formatFloatCount, colors.tcp, colors)
 			body = append(body, lipgloss.JoinHorizontal(lipgloss.Top, flowChart, " ", activeChart))
 			if snapshot.Role == "client" {
-				rttValues := latencySeries(window, 0.95)
+				rttValues := chartValues(window, chartEnd, m.selectedWindow(), func(sample sample) (float64, bool) {
+					return latencyValue(sample, 0.95)
+				})
 				rttCurrent := "—"
 				if latencyCount > 0 {
 					rttCurrent = formatLatency(latency.P95)
@@ -123,7 +142,7 @@ func (m Model) render() string {
 				rttChart := chartPanel("Echo RTT p95", rttValues, chartWidth, chartHeight, 0, expectedSamples, rttCurrent, formatLatency, colors.udp, colors)
 				body = append(body, lipgloss.JoinHorizontal(lipgloss.Top, payloadChart, " ", rttChart))
 			} else {
-				body = append(body, chartPanel("Payload I/O", ioValues, width, chartHeight, 0, expectedSamples, payloadCurrent, formatTableBits, payloadAccent, colors))
+				body = append(body, chartPanel("Payload I/O", ioChartValues, width, chartHeight, 0, expectedSamples, payloadCurrent, formatTableBits, payloadAccent, colors))
 			}
 		} else {
 			body = append(body, flowChart, payloadChart)
@@ -184,16 +203,19 @@ func (m Model) healthState(colors palette) (string, interface {
 		}
 		return "NOT READY", colors.warning
 	}
+	if strings.EqualFold(m.snapshot.State, "draining") {
+		return "DRAINING", colors.warning
+	}
 	if payload.Diverged {
 		return "I/O IMBALANCE", colors.danger
 	}
-	if len(recent) < 5 {
+	if sampleCoverage(recent) < payloadBalanceWindow {
 		return "WARMING UP", colors.warning
 	}
-	flows := summarize(values(recent, func(s sample) float64 { return s.FlowRate })).Average
-	failures := summarize(values(recent, func(s sample) float64 { return s.FailureRate })).Average
-	successes := summarize(values(recent, func(s sample) float64 { return s.SuccessRate })).Average
-	skipped := summarize(values(recent, func(s sample) float64 { return s.SkippedRate })).Average
+	flows := summarizeSamples(recent, func(s sample) float64 { return s.FlowRate }).Average
+	failures := summarizeSamples(recent, func(s sample) float64 { return s.FailureRate }).Average
+	successes := summarizeSamples(recent, func(s sample) float64 { return s.SuccessRate }).Average
+	skipped := summarizeSamples(recent, func(s sample) float64 { return s.SkippedRate }).Average
 	if outcomes := successes + failures; outcomes > 0 && failures/outcomes > 0.01 {
 		return "DEGRADED", colors.danger
 	}
@@ -249,11 +271,11 @@ func (m Model) clientLoadPanel(snapshot statusapi.Snapshot, flow, active distrib
 		accent = colors.healthy
 	}
 	recent := m.history.window(5 * time.Second)
-	recentSkipped := summarize(values(recent, func(sample sample) float64 { return sample.SkippedRate })).Average
+	recentSkipped := summarizeSamples(recent, func(sample sample) float64 { return sample.SkippedRate }).Average
 	if recentSkipped > 0 {
 		accent = colors.warning
 	}
-	if summarize(values(recent, func(sample sample) float64 { return sample.FailureRate })).Average > 0 {
+	if summarizeSamples(recent, func(sample sample) float64 { return sample.FailureRate }).Average > 0 {
 		accent = colors.danger
 	}
 	heading := joinSides(
@@ -363,7 +385,13 @@ func (m Model) windowAverages(role string, colors palette) string {
 	}
 	parts := []string{label}
 	for _, duration := range windows {
-		average := summarize(activityValues(m.history.window(duration), role)).Average
+		samples := m.history.window(duration)
+		average := summarizeSamples(samples, func(sample sample) float64 {
+			if role == "server" {
+				return sample.TCPRate + sample.UDPRate
+			}
+			return sample.FlowRate
+		}).Average
 		parts = append(parts, fmt.Sprintf("%s %s", windowLabel(duration), formatRate(average)))
 	}
 	return styled(colors.muted).Render(strings.Join(parts, " · "))
@@ -570,26 +598,31 @@ func markAxisLabel(occupied []bool, start, width int) {
 }
 
 func payloadBalanceFor(samples []sample) payloadBalance {
-	result := payloadBalance{Ready: len(samples) >= payloadBalanceMinSamples}
+	result := payloadBalance{Ready: sampleCoverage(samples) >= payloadBalanceMinDuration}
 	if len(samples) == 0 {
 		return result
 	}
 
-	var imbalanced int
+	var weight, imbalancedFor float64
 	for _, sample := range samples {
 		tx := sample.BytesTX * 8
 		rx := sample.BytesRX * 8
-		result.TX += tx
-		result.RX += rx
+		seconds := sample.Covered.Seconds()
+		if seconds <= 0 {
+			seconds = 1
+		}
+		weight += seconds
+		result.TX += tx * seconds
+		result.RX += rx * seconds
 		if payloadGap(tx, rx) >= payloadBalanceThreshold {
-			imbalanced++
+			imbalancedFor += seconds
 		}
 	}
-	result.TX /= float64(len(samples))
-	result.RX /= float64(len(samples))
+	result.TX /= weight
+	result.RX /= weight
 	result.Total = result.TX + result.RX
 	result.Gap = payloadGap(result.TX, result.RX)
-	result.Diverged = result.Ready && imbalanced >= payloadBalanceMinSamples && result.Gap >= payloadBalanceThreshold
+	result.Diverged = result.Ready && imbalancedFor >= payloadBalanceMinDuration.Seconds() && result.Gap >= payloadBalanceThreshold
 	return result
 }
 
@@ -662,8 +695,8 @@ func (m Model) portTable(snapshot statusapi.Snapshot, payload payloadBalance, co
 	}
 	ports := append([]portSample(nil), m.history.samples[len(m.history.samples)-1].Ports...)
 	sort.Slice(ports, func(i, j int) bool {
-		left := ports[i].BytesTX + ports[i].BytesRX + ports[i].Activity
-		right := ports[j].BytesTX + ports[j].BytesRX + ports[j].Activity
+		left := ports[i].BytesTX + ports[i].BytesRX + ports[i].Activity + ports[i].Failures
+		right := ports[j].BytesTX + ports[j].BytesRX + ports[j].Activity + ports[j].Failures
 		return left > right
 	})
 	limit := 6
@@ -779,21 +812,26 @@ func averageErrorRates(samples []sample) errorRates {
 	if len(samples) == 0 {
 		return result
 	}
+	var totalWeight float64
 	for _, sample := range samples {
-		result.Dial += sample.Errors.Dial
-		result.Read += sample.Errors.Read
-		result.Write += sample.Errors.Write
-		result.Mismatch += sample.Errors.Mismatch
-		result.MTU += sample.Errors.MTU
-		result.Accept += sample.Errors.Accept
+		weight := sample.Covered.Seconds()
+		if weight <= 0 {
+			weight = 1
+		}
+		totalWeight += weight
+		result.Dial += sample.Errors.Dial * weight
+		result.Read += sample.Errors.Read * weight
+		result.Write += sample.Errors.Write * weight
+		result.Mismatch += sample.Errors.Mismatch * weight
+		result.MTU += sample.Errors.MTU * weight
+		result.Accept += sample.Errors.Accept * weight
 	}
-	count := float64(len(samples))
-	result.Dial /= count
-	result.Read /= count
-	result.Write /= count
-	result.Mismatch /= count
-	result.MTU /= count
-	result.Accept /= count
+	result.Dial /= totalWeight
+	result.Read /= totalWeight
+	result.Write /= totalWeight
+	result.Mismatch /= totalWeight
+	result.MTU /= totalWeight
+	result.Accept /= totalWeight
 	return result
 }
 
@@ -890,6 +928,9 @@ func (m Model) footer(colors palette, width int) string {
 			keycap("q", colors) + styled(colors.muted).Render(" quit")
 	}
 	mode := styled(colors.healthy).Bold(true).Render("● LIVE")
+	if !m.connected {
+		mode = styled(colors.danger).Bold(true).Render("● STALE")
+	}
 	right := mode + styled(colors.muted).Render("  ·  "+windowLabel(m.selectedWindow()))
 	return lipgloss.NewStyle().MaxWidth(width).Render(joinSides(left, right, width))
 }

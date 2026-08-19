@@ -30,10 +30,12 @@ type Model struct {
 	dark        bool
 	color       bool
 	showHelp    bool
+	fetching    bool
+	refreshDue  bool
 }
 
 func NewModel(client *Client, color bool) Model {
-	return Model{client: client, dark: true, color: color}
+	return Model{client: client, dark: true, color: color, fetching: true}
 }
 
 func (m Model) Init() tea.Cmd {
@@ -81,24 +83,42 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		case "?", "f1":
 			m.showHelp = !m.showHelp
 		case "r":
+			if m.fetching {
+				return m, nil
+			}
+			m.fetching = true
 			return m, m.fetch(false)
 		}
 	case fetchResult:
+		m.fetching = false
 		if message.err != nil {
 			m.connected = false
 			m.lastError = message.err
-		} else {
+		} else if m.snapshot == nil || message.snapshot.SampledAt.After(m.snapshot.SampledAt) {
 			m.connected = true
 			m.lastError = nil
 			m.history.add(message.snapshot)
 			copy := message.snapshot
 			m.snapshot = &copy
+		} else {
+			m.connected = true
+			m.lastError = nil
+		}
+		if m.refreshDue {
+			m.refreshDue = false
+			m.fetching = true
+			return m, m.fetch(true)
 		}
 		if message.continueRefresh {
 			return m, tea.Tick(time.Second, func(now time.Time) tea.Msg { return refreshMsg(now) })
 		}
 		return m, nil
 	case refreshMsg:
+		if m.fetching {
+			m.refreshDue = true
+			return m, nil
+		}
+		m.fetching = true
 		return m, m.fetch(true)
 	}
 	return m, nil
