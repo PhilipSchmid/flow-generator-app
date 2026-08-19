@@ -201,6 +201,16 @@ func TestTimeAxisKeepsTicksWhenLabelsDoNotFit(t *testing.T) {
 	assert.Contains(t, axis, "┴")
 }
 
+func TestTimeAxisKeepsMinuteLabelsOnNarrowerCharts(t *testing.T) {
+	labels := []string{"−15m", "−14m", "−13m", "−12m", "−11m", "−10m", "−9m", "−8m", "−7m", "−6m", "−5m", "−4m", "−3m", "−2m", "−1m", "now"}
+	for width := 78; width <= 90; width++ {
+		axis := timeAxis(width, 15*time.Minute)
+		for _, label := range labels {
+			assert.Contains(t, axis, label, "width %d", width)
+		}
+	}
+}
+
 func TestTimeRangeSelectorUsesSegmentedTabs(t *testing.T) {
 	model := Model{windowIndex: 1}
 	colors := newPalette(true, false)
