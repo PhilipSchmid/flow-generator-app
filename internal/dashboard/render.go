@@ -11,6 +11,19 @@ import (
 	statusapi "github.com/PhilipSchmid/flow-generator-app/internal/status"
 )
 
+const (
+	payloadBalanceWindow     = 5 * time.Second
+	payloadBalanceMinSamples = 3
+	payloadBalanceThreshold  = 0.05
+)
+
+type payloadBalance struct {
+	TX, RX, Total float64
+	Gap           float64
+	Ready         bool
+	Diverged      bool
+}
+
 func (m Model) render() string {
 	colors := newPalette(m.dark, m.color)
 	if m.width > 0 && (m.width < 60 || m.height < 16) {
@@ -34,6 +47,9 @@ func (m Model) render() string {
 	flow := summarize(rateValues)
 	tx := summarize(values(window, func(s sample) float64 { return s.BytesTX * 8 }))
 	rx := summarize(values(window, func(s sample) float64 { return s.BytesRX * 8 }))
+	ioValues := values(window, func(s sample) float64 { return (s.BytesTX + s.BytesRX) * 8 })
+	io := summarize(ioValues)
+	payload := payloadBalanceFor(m.history.window(payloadBalanceWindow))
 	active := summarize(values(window, func(s sample) float64 { return s.Active }))
 	latency, latencyCount := latencySummary(window)
 	state, stateColor := m.healthState(colors)
@@ -82,7 +98,15 @@ func (m Model) render() string {
 			reference = snapshot.Configuration.Rate
 		}
 		flowChart := chartPanel(rateTitle, rateValues, chartWidth, chartHeight, reference, expectedSamples, formatRate(flow.Current), formatFloatRate, colors.primary, colors)
-		payloadChart := chartPanel("Payload throughput", values(window, func(s sample) float64 { return (s.BytesTX + s.BytesRX) * 8 }), chartWidth, chartHeight, 0, expectedSamples, "TX "+formatBits(tx.Current)+" · RX "+formatBits(rx.Current), formatTableBits, colors.tx, colors)
+		payloadCurrent := formatBits(io.Current) + " · BALANCED"
+		payloadAccent := colors.tx
+		if !payload.Ready {
+			payloadCurrent = formatBits(io.Current) + " · CHECKING"
+		} else if payload.Diverged {
+			payloadCurrent = fmt.Sprintf("5s TX %s · RX %s · GAP %.1f%%", formatBits(payload.TX), formatBits(payload.RX), payload.Gap*100)
+			payloadAccent = colors.danger
+		}
+		payloadChart := chartPanel("Payload I/O", ioValues, chartWidth, chartHeight, 0, expectedSamples, payloadCurrent, formatTableBits, payloadAccent, colors)
 		if width >= 120 {
 			activeTitle := "Active TCP"
 			if snapshot.Role == "client" {
@@ -99,7 +123,7 @@ func (m Model) render() string {
 				rttChart := chartPanel("Echo RTT p95", rttValues, chartWidth, chartHeight, 0, expectedSamples, rttCurrent, formatLatency, colors.udp, colors)
 				body = append(body, lipgloss.JoinHorizontal(lipgloss.Top, payloadChart, " ", rttChart))
 			} else {
-				body = append(body, chartPanel("Payload throughput", values(window, func(s sample) float64 { return (s.BytesTX + s.BytesRX) * 8 }), width, chartHeight, 0, expectedSamples, "TX "+formatBits(tx.Current)+" · RX "+formatBits(rx.Current), formatTableBits, colors.tx, colors))
+				body = append(body, chartPanel("Payload I/O", ioValues, width, chartHeight, 0, expectedSamples, payloadCurrent, formatTableBits, payloadAccent, colors))
 			}
 		} else {
 			body = append(body, flowChart, payloadChart)
@@ -116,8 +140,8 @@ func (m Model) render() string {
 	if width >= 160 {
 		detailWidth = maxInt((width-1)/2-4, 10)
 	}
-	distribution := m.distributionTable(snapshot, flow, tx, rx, active, latency, latencyCount, colors, detailWidth)
-	ports := m.portTable(snapshot, colors, detailWidth)
+	distribution := m.distributionTable(snapshot, flow, io, tx, rx, active, latency, latencyCount, payload, colors, detailWidth)
+	ports := m.portTable(snapshot, payload, colors, detailWidth)
 	if m.height >= 28 || width < 90 {
 		switch {
 		case width >= 160:
@@ -149,13 +173,20 @@ func (m Model) healthState(colors palette) (string, interface {
 	if !m.connected {
 		return "DISCONNECTED", colors.danger
 	}
+	recent := m.history.window(payloadBalanceWindow)
+	payload := payloadBalanceFor(recent)
 	if m.snapshot.Server != nil {
 		if m.snapshot.Server.Ready && m.snapshot.Server.Healthy {
+			if payload.Diverged {
+				return "I/O IMBALANCE", colors.danger
+			}
 			return "READY", colors.healthy
 		}
 		return "NOT READY", colors.warning
 	}
-	recent := m.history.window(5 * time.Second)
+	if payload.Diverged {
+		return "I/O IMBALANCE", colors.danger
+	}
 	if len(recent) < 5 {
 		return "WARMING UP", colors.warning
 	}
@@ -538,7 +569,43 @@ func markAxisLabel(occupied []bool, start, width int) {
 	}
 }
 
-func (m Model) distributionTable(snapshot statusapi.Snapshot, flow, tx, rx, active, latency distribution, latencyCount uint64, colors palette, width int) string {
+func payloadBalanceFor(samples []sample) payloadBalance {
+	result := payloadBalance{Ready: len(samples) >= payloadBalanceMinSamples}
+	if len(samples) == 0 {
+		return result
+	}
+
+	var imbalanced int
+	for _, sample := range samples {
+		tx := sample.BytesTX * 8
+		rx := sample.BytesRX * 8
+		result.TX += tx
+		result.RX += rx
+		if payloadGap(tx, rx) >= payloadBalanceThreshold {
+			imbalanced++
+		}
+	}
+	result.TX /= float64(len(samples))
+	result.RX /= float64(len(samples))
+	result.Total = result.TX + result.RX
+	result.Gap = payloadGap(result.TX, result.RX)
+	result.Diverged = result.Ready && imbalanced >= payloadBalanceMinSamples && result.Gap >= payloadBalanceThreshold
+	return result
+}
+
+func payloadGap(tx, rx float64) float64 {
+	peak := maxFloat(tx, rx)
+	if peak <= 0 {
+		return 0
+	}
+	return math.Abs(tx-rx) / peak
+}
+
+func formatPayloadGap(tx, rx float64) string {
+	return fmt.Sprintf("%.1f%%", payloadGap(tx, rx)*100)
+}
+
+func (m Model) distributionTable(snapshot statusapi.Snapshot, flow, io, tx, rx, active, latency distribution, latencyCount uint64, payload payloadBalance, colors palette, width int) string {
 	labelWidth, valueWidth := distributionColumnWidths(width)
 	formatRow := func(label string, cells ...string) string {
 		var row strings.Builder
@@ -562,8 +629,11 @@ func (m Model) distributionTable(snapshot statusapi.Snapshot, flow, tx, rx, acti
 	} else {
 		row("Requests/s", flow, formatFloatRate)
 	}
-	row("Payload TX", tx, formatTableBits)
-	row("Payload RX", rx, formatTableBits)
+	row("Payload I/O", io, formatTableBits)
+	if payload.Diverged {
+		row("Payload TX", tx, formatTableBits)
+		row("Payload RX", rx, formatTableBits)
+	}
 	row("Active", active, formatFloatCount)
 	if snapshot.Role == "client" {
 		formatRTT := func(value float64) string { return formatLatency(value) }
@@ -586,7 +656,7 @@ func distributionColumnWidths(width int) (int, int) {
 	return labelWidth, valueWidth
 }
 
-func (m Model) portTable(snapshot statusapi.Snapshot, colors palette, width int) string {
+func (m Model) portTable(snapshot statusapi.Snapshot, payload payloadBalance, colors palette, width int) string {
 	if len(m.history.samples) == 0 {
 		return styled(colors.muted).Bold(true).Render("PORT ACTIVITY  ·  CURRENT") + "\n" + styled(colors.muted).Render("Waiting for rate samples")
 	}
@@ -608,11 +678,21 @@ func (m Model) portTable(snapshot statusapi.Snapshot, colors palette, width int)
 	builder.WriteString("\n")
 	var columnWidths []int
 	if snapshot.Role == "client" {
-		columnWidths = expandedColumnWidths(width, []int{5, 6, 10, 11, 12, 12, 9})
-		builder.WriteString(styled(colors.muted).Render(alignedTableRow([]string{"PROTO", "PORT", "FLOW/S", "PACKETS/S", "TX", "RX", "FAIL/S"}, columnWidths)))
+		if payload.Diverged {
+			columnWidths = expandedColumnWidths(width, []int{5, 5, 8, 9, 9, 9, 7, 7})
+			builder.WriteString(styled(colors.muted).Render(alignedTableRow([]string{"PROTO", "PORT", "FLOW/S", "PACKETS/S", "TX", "RX", "GAP", "FAIL/S"}, columnWidths)))
+		} else {
+			columnWidths = expandedColumnWidths(width, []int{5, 6, 10, 11, 14, 9})
+			builder.WriteString(styled(colors.muted).Render(alignedTableRow([]string{"PROTO", "PORT", "FLOW/S", "PACKETS/S", "PAYLOAD", "FAIL/S"}, columnWidths)))
+		}
 	} else {
-		columnWidths = expandedColumnWidths(width, []int{5, 6, 12, 12, 12})
-		builder.WriteString(styled(colors.muted).Render(alignedTableRow([]string{"PROTO", "PORT", "REQUESTS/S", "TX", "RX"}, columnWidths)))
+		if payload.Diverged {
+			columnWidths = expandedColumnWidths(width, []int{5, 6, 12, 11, 11, 8})
+			builder.WriteString(styled(colors.muted).Render(alignedTableRow([]string{"PROTO", "PORT", "REQUESTS/S", "TX", "RX", "GAP"}, columnWidths)))
+		} else {
+			columnWidths = expandedColumnWidths(width, []int{5, 6, 12, 14})
+			builder.WriteString(styled(colors.muted).Render(alignedTableRow([]string{"PROTO", "PORT", "REQUESTS/S", "PAYLOAD"}, columnWidths)))
+		}
 	}
 	for _, port := range ports[:limit] {
 		protocolColor := colors.tcp
@@ -633,9 +713,17 @@ func (m Model) portTable(snapshot statusapi.Snapshot, colors palette, width int)
 			if port.Protocol == "udp" {
 				packetRate = formatFloatRate(port.PacketRate)
 			}
-			line = "\n" + alignedTableRow([]string{strings.ToUpper(port.Protocol), port.Port, formatFloatRate(activity), packetRate, formatBits(port.BytesTX * 8), formatBits(port.BytesRX * 8), formatFloatRate(port.Failures)}, columnWidths)
+			if payload.Diverged {
+				line = "\n" + alignedTableRow([]string{strings.ToUpper(port.Protocol), port.Port, formatFloatRate(activity), packetRate, formatBits(port.BytesTX * 8), formatBits(port.BytesRX * 8), formatPayloadGap(port.BytesTX, port.BytesRX), formatFloatRate(port.Failures)}, columnWidths)
+			} else {
+				line = "\n" + alignedTableRow([]string{strings.ToUpper(port.Protocol), port.Port, formatFloatRate(activity), packetRate, formatBits((port.BytesTX + port.BytesRX) * 8), formatFloatRate(port.Failures)}, columnWidths)
+			}
 		} else {
-			line = "\n" + alignedTableRow([]string{strings.ToUpper(port.Protocol), port.Port, formatFloatRate(activity) + " " + activityLabel, formatBits(port.BytesTX * 8), formatBits(port.BytesRX * 8)}, columnWidths)
+			if payload.Diverged {
+				line = "\n" + alignedTableRow([]string{strings.ToUpper(port.Protocol), port.Port, formatFloatRate(activity) + " " + activityLabel, formatBits(port.BytesTX * 8), formatBits(port.BytesRX * 8), formatPayloadGap(port.BytesTX, port.BytesRX)}, columnWidths)
+			} else {
+				line = "\n" + alignedTableRow([]string{strings.ToUpper(port.Protocol), port.Port, formatFloatRate(activity) + " " + activityLabel, formatBits((port.BytesTX + port.BytesRX) * 8)}, columnWidths)
+			}
 		}
 		builder.WriteString(styled(protocolColor).Render(line))
 	}

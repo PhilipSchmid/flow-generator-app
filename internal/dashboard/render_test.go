@@ -68,6 +68,46 @@ func TestCapacityLimitedDashboardExplainsMissingStarts(t *testing.T) {
 	assert.NotContains(t, rendered, "AUTO RANGE")
 }
 
+func TestPayloadIORemainsCombinedWhileBalanced(t *testing.T) {
+	started := time.Now().UTC().Add(-time.Minute)
+	first := dashboardSnapshot(started, started, 0, 0, 0)
+	model := Model{connected: true, width: 200, height: 50, color: false, dark: true}
+	model.history.add(first)
+	var latest statusapi.Snapshot
+	for second := 1; second <= 5; second++ {
+		latest = dashboardSnapshot(started, started.Add(time.Duration(second)*time.Second), uint64(second*100), uint64(second*1000), 10)
+		model.history.add(latest)
+	}
+	model.snapshot = &latest
+
+	rendered := model.render()
+	assert.Contains(t, rendered, "PAYLOAD I/O")
+	assert.Contains(t, rendered, "BALANCED")
+	assert.NotContains(t, rendered, "Payload TX")
+	assert.NotContains(t, rendered, "Payload RX")
+}
+
+func TestPayloadIODisclosesSustainedImbalance(t *testing.T) {
+	started := time.Now().UTC().Add(-time.Minute)
+	first := dashboardSnapshot(started, started, 0, 0, 0)
+	model := Model{connected: true, width: 200, height: 50, color: false, dark: true}
+	model.history.add(first)
+	var latest statusapi.Snapshot
+	for second := 1; second <= 5; second++ {
+		latest = dashboardSnapshot(started, started.Add(time.Duration(second)*time.Second), uint64(second*100), uint64(second*1000), 10)
+		latest.Traffic.Ports[0].BytesReceived = uint64(second * 400)
+		model.history.add(latest)
+	}
+	model.snapshot = &latest
+
+	rendered := model.render()
+	assert.Contains(t, rendered, "I/O IMBALANCE")
+	assert.Contains(t, rendered, "5s TX")
+	assert.Contains(t, rendered, "GAP 60.0%")
+	assert.Contains(t, rendered, "Payload TX")
+	assert.Contains(t, rendered, "Payload RX")
+}
+
 func TestCompactConfigurationLine(t *testing.T) {
 	started := time.Now().UTC().Add(-time.Minute)
 	snapshot := dashboardSnapshot(started, started.Add(time.Second), 100, 1000, 10)
@@ -252,6 +292,33 @@ func TestTimeRangeSelectorUsesSegmentedTabs(t *testing.T) {
 	assert.NotContains(t, compact, "1 MIN")
 }
 
+func TestPayloadBalanceRequiresSustainedDifference(t *testing.T) {
+	balanced := payloadBalanceFor([]sample{
+		{BytesTX: 100, BytesRX: 100},
+		{BytesTX: 100, BytesRX: 100},
+		{BytesTX: 100, BytesRX: 100},
+	})
+	assert.True(t, balanced.Ready)
+	assert.False(t, balanced.Diverged)
+	assert.Zero(t, balanced.Gap)
+	assert.Equal(t, float64(1600), balanced.Total)
+
+	oneSpike := payloadBalanceFor([]sample{
+		{BytesTX: 100, BytesRX: 50},
+		{BytesTX: 100, BytesRX: 100},
+		{BytesTX: 100, BytesRX: 100},
+	})
+	assert.False(t, oneSpike.Diverged)
+
+	sustained := payloadBalanceFor([]sample{
+		{BytesTX: 100, BytesRX: 50},
+		{BytesTX: 100, BytesRX: 50},
+		{BytesTX: 100, BytesRX: 50},
+	})
+	assert.True(t, sustained.Diverged)
+	assert.InDelta(t, 0.5, sustained.Gap, 0.001)
+}
+
 func TestChartBoundsHandleEmptyHistory(t *testing.T) {
 	minimum, maximum := chartBounds(nil, 100)
 	assert.Zero(t, minimum)
@@ -293,17 +360,23 @@ func TestWideDashboardSpacesPercentileColumns(t *testing.T) {
 }
 
 func TestPortColumnsFillWidePanel(t *testing.T) {
-	clientHeaders := []string{"PROTO", "PORT", "FLOW/S", "PACKETS/S", "TX", "RX", "FAIL/S"}
-	clientWidths := expandedColumnWidths(95, []int{5, 6, 10, 11, 12, 12, 9})
+	clientHeaders := []string{"PROTO", "PORT", "FLOW/S", "PACKETS/S", "PAYLOAD", "FAIL/S"}
+	clientWidths := expandedColumnWidths(95, []int{5, 6, 10, 11, 14, 9})
 	clientRow := alignedTableRow(clientHeaders, clientWidths)
 	assert.Equal(t, 95, lipgloss.Width(clientRow))
 	assert.True(t, strings.HasSuffix(clientRow, "FAIL/S"))
 
-	serverHeaders := []string{"PROTO", "PORT", "REQUESTS/S", "TX", "RX"}
-	serverWidths := expandedColumnWidths(95, []int{5, 6, 12, 12, 12})
+	serverHeaders := []string{"PROTO", "PORT", "REQUESTS/S", "PAYLOAD"}
+	serverWidths := expandedColumnWidths(95, []int{5, 6, 12, 14})
 	serverRow := alignedTableRow(serverHeaders, serverWidths)
 	assert.Equal(t, 95, lipgloss.Width(serverRow))
-	assert.True(t, strings.HasSuffix(serverRow, "RX"))
+	assert.True(t, strings.HasSuffix(serverRow, "PAYLOAD"))
+
+	alertHeaders := []string{"PROTO", "PORT", "FLOW/S", "PACKETS/S", "TX", "RX", "GAP", "FAIL/S"}
+	alertWidths := expandedColumnWidths(95, []int{5, 5, 8, 9, 9, 9, 7, 7})
+	alertRow := alignedTableRow(alertHeaders, alertWidths)
+	assert.Equal(t, 95, lipgloss.Width(alertRow))
+	assert.Contains(t, alertRow, "GAP")
 }
 
 func serverDashboardSnapshot(started, sampled time.Time, requests uint64) statusapi.Snapshot {
