@@ -171,16 +171,34 @@ func TestLineChartUsesRequestedDimensions(t *testing.T) {
 	}), "chart should contain a Braille trace")
 }
 
-func TestTimeAxisLabelsSelectedWindow(t *testing.T) {
-	oneMinute := timeAxis(40, time.Minute)
-	assert.Contains(t, oneMinute, "−30s")
-	assert.NotContains(t, oneMinute, "−0m")
+func TestTimeAxisScalesLabelsWithSelectedWindow(t *testing.T) {
+	tests := []struct {
+		name     string
+		window   time.Duration
+		expected []string
+	}{
+		{name: "one minute", window: time.Minute, expected: []string{"−1m", "−50s", "−40s", "−30s", "−20s", "−10s", "now"}},
+		{name: "five minutes", window: 5 * time.Minute, expected: []string{"−5m", "−4m30s", "−4m", "−3m30s", "−3m", "−2m30s", "−2m", "−1m30s", "−1m", "−30s", "now"}},
+		{name: "fifteen minutes", window: 15 * time.Minute, expected: []string{"−15m", "−14m", "−13m", "−12m", "−11m", "−10m", "−9m", "−8m", "−7m", "−6m", "−5m", "−4m", "−3m", "−2m", "−1m", "now"}},
+	}
 
-	axis := timeAxis(40, 5*time.Minute)
-	assert.Equal(t, 40, lipgloss.Width(axis))
-	assert.Contains(t, axis, "−5m")
-	assert.Contains(t, axis, "−2m30s")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			axis := timeAxis(90, tt.window)
+			assert.Equal(t, 90, lipgloss.Width(axis))
+			for _, label := range tt.expected {
+				assert.Contains(t, axis, label)
+			}
+		})
+	}
+}
+
+func TestTimeAxisKeepsTicksWhenLabelsDoNotFit(t *testing.T) {
+	axis := timeAxis(24, 5*time.Minute)
+	assert.Equal(t, 24, lipgloss.Width(axis))
+	assert.True(t, strings.HasPrefix(axis, "−5m"))
 	assert.True(t, strings.HasSuffix(axis, "now"))
+	assert.Contains(t, axis, "┴")
 }
 
 func TestTimeRangeSelectorUsesSegmentedTabs(t *testing.T) {

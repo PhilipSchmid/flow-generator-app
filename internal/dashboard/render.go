@@ -413,16 +413,66 @@ func timeAxis(width int, window time.Duration) string {
 		return ""
 	}
 	axis := []rune(strings.Repeat("─", width))
+	if window <= 0 {
+		placeAxisLabel(axis, "now", maxInt(width-3, 0))
+		return string(axis)
+	}
+
+	type axisLabel struct {
+		text      string
+		position  int
+		majorTick bool
+	}
+	step := timeAxisStep(window)
+	labels := make([]axisLabel, 0, maxInt(int(window/step)-1, 0))
+	for elapsed := step; elapsed < window; elapsed += step {
+		position := int(math.Round(float64(elapsed) * float64(width-1) / float64(window)))
+		if position > 0 && position < width-1 {
+			axis[position] = '┴'
+		}
+		remaining := window - elapsed
+		labels = append(labels, axisLabel{
+			text:      negativeDurationLabel(remaining),
+			position:  position,
+			majorTick: remaining%time.Minute == 0,
+		})
+	}
+
 	left := negativeDurationLabel(window)
-	middle := negativeDurationLabel(window / 2)
 	right := "now"
 	placeAxisLabel(axis, left, 0)
 	placeAxisLabel(axis, right, width-len([]rune(right)))
-	middleStart := (width - len([]rune(middle))) / 2
-	if middleStart > len([]rune(left)) && middleStart+len([]rune(middle)) < width-len([]rune(right))-1 {
-		placeAxisLabel(axis, middle, middleStart)
+	occupied := make([]bool, width)
+	markAxisLabel(occupied, 0, len([]rune(left)))
+	markAxisLabel(occupied, width-len([]rune(right)), len([]rune(right)))
+
+	// Prefer whole-minute labels when a narrow terminal cannot show every
+	// configured tick. Minor ticks remain visible on the axis.
+	for _, majorOnly := range []bool{true, false} {
+		for _, label := range labels {
+			if label.majorTick != majorOnly {
+				continue
+			}
+			labelWidth := len([]rune(label.text))
+			start := label.position - (labelWidth-1)/2
+			if axisLabelFits(occupied, start, labelWidth) {
+				placeAxisLabel(axis, label.text, start)
+				markAxisLabel(occupied, start, labelWidth)
+			}
+		}
 	}
 	return string(axis)
+}
+
+func timeAxisStep(window time.Duration) time.Duration {
+	switch {
+	case window <= time.Minute:
+		return 10 * time.Second
+	case window <= 5*time.Minute:
+		return 30 * time.Second
+	default:
+		return time.Minute
+	}
 }
 
 func negativeDurationLabel(duration time.Duration) string {
@@ -446,6 +496,28 @@ func placeAxisLabel(axis []rune, label string, start int) {
 			return
 		}
 		axis[start+i] = r
+	}
+}
+
+func axisLabelFits(occupied []bool, start, width int) bool {
+	if start < 0 || width <= 0 || start+width > len(occupied) {
+		return false
+	}
+	from := maxInt(start-1, 0)
+	to := minInt(start+width+1, len(occupied))
+	for position := from; position < to; position++ {
+		if occupied[position] {
+			return false
+		}
+	}
+	return true
+}
+
+func markAxisLabel(occupied []bool, start, width int) {
+	from := maxInt(start, 0)
+	to := minInt(start+width, len(occupied))
+	for position := from; position < to; position++ {
+		occupied[position] = true
 	}
 }
 
