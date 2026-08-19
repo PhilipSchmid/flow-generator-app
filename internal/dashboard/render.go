@@ -285,12 +285,9 @@ func (m Model) clientLoadPanel(snapshot statusapi.Snapshot, flow, active distrib
 	)
 	bar := meterBar(attainment, inner, accent, colors.border)
 
-	activeCount := uint64(maxFloat(active.Current, 0))
-	maxConcurrent := uint64(maxInt(snapshot.Configuration.MaxConcurrent, 0))
-	headroom := uint64(0)
-	if maxConcurrent > activeCount {
-		headroom = maxConcurrent - activeCount
-	}
+	activeCount := maxFloat(active.Current, 0)
+	maxConcurrent := maxInt(snapshot.Configuration.MaxConcurrent, 0)
+	headroom := maxFloat(float64(maxConcurrent)-activeCount, 0)
 	skippedStyle := styled(colors.muted)
 	if recentSkipped > 0 {
 		skippedStyle = styled(colors.warning).Bold(true)
@@ -299,10 +296,10 @@ func (m Model) clientLoadPanel(snapshot statusapi.Snapshot, flow, active distrib
 		styled(accent).Bold(true).Render(formatRate(flow.Current)) + styled(colors.muted).Render(" started"),
 		styled(colors.text).Render(formatRate(target)) + styled(colors.muted).Render(" scheduled"),
 		skippedStyle.Render(formatRate(recentSkipped)) + styled(colors.muted).Render(" skipped"),
-		styled(colors.tcp).Bold(true).Render(fmt.Sprintf("%s / %s", formatCount(activeCount), formatCount(maxConcurrent))) + styled(colors.muted).Render(" active"),
+		styled(colors.tcp).Bold(true).Render(fmt.Sprintf("%s / %s", formatFloatCount(activeCount), formatIntCount(maxConcurrent))) + styled(colors.muted).Render(" active"),
 	}
 	if inner >= 100 {
-		rateParts = append(rateParts, styled(colors.text).Render(formatCount(headroom))+styled(colors.muted).Render(" headroom"))
+		rateParts = append(rateParts, styled(colors.text).Render(formatFloatCount(headroom))+styled(colors.muted).Render(" headroom"))
 	}
 	rateLine := strings.Join(rateParts, styled(colors.border).Render("  ·  "))
 	lifetimeLine := strings.Join([]string{
@@ -324,7 +321,7 @@ func (m Model) serverSummaryPanel(snapshot statusapi.Snapshot, flow distribution
 	errors := totalErrors(snapshot.Server.Errors)
 	line := strings.Join([]string{
 		styled(colors.primary).Bold(true).Render(formatRate(flow.Current)) + styled(colors.muted).Render(" requests"),
-		styled(colors.tcp).Bold(true).Render(formatCount(uint64(maxInt64(traffic.ActiveTCPConnections, 0)))) + styled(colors.muted).Render(" TCP connections"),
+		styled(colors.tcp).Bold(true).Render(formatInt64Count(traffic.ActiveTCPConnections)) + styled(colors.muted).Render(" TCP connections"),
 		styled(colors.tcp).Bold(true).Render(formatCount(snapshot.Server.ActiveTCPClients)) + styled(colors.muted).Render(" active client IPs"),
 		styled(colors.danger).Render(formatCount(errors)) + styled(colors.muted).Render(" errors"),
 	}, styled(colors.border).Render("  ·  "))
@@ -1040,6 +1037,27 @@ func formatFloatCount(value float64) string {
 	}
 	return formatSI(value, "")
 }
+
+func formatIntCount(value int) string {
+	if value < 0 {
+		return "0"
+	}
+	if value < 1000 {
+		return fmt.Sprintf("%d", value)
+	}
+	return formatSI(float64(value), "")
+}
+
+func formatInt64Count(value int64) string {
+	if value < 0 {
+		return "0"
+	}
+	if value < 1000 {
+		return fmt.Sprintf("%d", value)
+	}
+	return formatSI(float64(value), "")
+}
+
 func formatLatency(value float64) string {
 	if value < 0 {
 		return "—"
@@ -1147,12 +1165,6 @@ func clipLines(content string, height int) string {
 	return strings.Join(lines[:height], "\n")
 }
 func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-func maxInt64(a, b int64) int64 {
 	if a > b {
 		return a
 	}
