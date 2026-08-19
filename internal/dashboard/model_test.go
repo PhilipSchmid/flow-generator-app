@@ -43,6 +43,40 @@ func TestManualRefreshDoesNotStartAnotherRefreshLoop(t *testing.T) {
 	assert.NotNil(t, scheduledCommand)
 }
 
+func TestRefreshesAreCoalescedWhileFetchIsRunning(t *testing.T) {
+	model := Model{fetching: true}
+	model = updateWithKey(t, model, tea.Key{Text: "r", Code: 'r'})
+	assert.True(t, model.fetching)
+	assert.False(t, model.refreshDue)
+
+	updated, command := model.Update(refreshMsg(time.Now()))
+	model = updated.(Model)
+	assert.Nil(t, command)
+	assert.True(t, model.refreshDue)
+
+	now := time.Now().UTC()
+	updated, command = model.Update(fetchResult{snapshot: statusapi.Snapshot{
+		Role: "client", StartedAt: now, SampledAt: now, Client: &statusapi.ClientSnapshot{},
+	}})
+	model = updated.(Model)
+	assert.NotNil(t, command)
+	assert.True(t, model.fetching)
+	assert.False(t, model.refreshDue)
+}
+
+func TestStaleFetchResultDoesNotReplaceCurrentSnapshot(t *testing.T) {
+	now := time.Now().UTC()
+	current := statusapi.Snapshot{Role: "client", StartedAt: now, SampledAt: now, Client: &statusapi.ClientSnapshot{FlowsStarted: 2}}
+	model := Model{snapshot: &current, connected: true}
+
+	updated, _ := model.Update(fetchResult{snapshot: statusapi.Snapshot{
+		Role: "client", StartedAt: now, SampledAt: now.Add(-time.Second), Client: &statusapi.ClientSnapshot{FlowsStarted: 1},
+	}})
+	model = updated.(Model)
+	require.NotNil(t, model.snapshot)
+	assert.Equal(t, uint64(2), model.snapshot.Client.FlowsStarted)
+}
+
 func updateWithKey(t *testing.T, model Model, key tea.Key) Model {
 	t.Helper()
 	updated, _ := model.Update(tea.KeyPressMsg(key))

@@ -46,12 +46,65 @@ func TestHistoryClearsOnRestart(t *testing.T) {
 	assert.Empty(t, samples.samples)
 }
 
+func TestHistoryIgnoresOutOfOrderSnapshots(t *testing.T) {
+	started := time.Now().UTC()
+	var samples history
+	samples.add(dashboardSnapshot(started, started.Add(2*time.Second), 20, 200, 1))
+	samples.add(dashboardSnapshot(started, started.Add(time.Second), 10, 100, 1))
+	samples.add(dashboardSnapshot(started, started.Add(3*time.Second), 30, 300, 1))
+
+	require.Len(t, samples.samples, 1)
+	assert.Equal(t, float64(10), samples.samples[0].FlowRate)
+}
+
+func TestHistoryIncludesClientPortsWithOnlyFailures(t *testing.T) {
+	started := time.Now().UTC()
+	first := dashboardSnapshot(started, started.Add(time.Second), 0, 0, 0)
+	second := dashboardSnapshot(started, started.Add(2*time.Second), 0, 0, 0)
+	first.Traffic.Ports = nil
+	second.Traffic.Ports = nil
+	first.Client.PortFlows = []statusapi.PortFlowSnapshot{{Protocol: "tcp", Port: 8080}}
+	second.Client.PortFlows = []statusapi.PortFlowSnapshot{{Protocol: "tcp", Port: 8080, Started: 4, Failed: 4}}
+
+	var samples history
+	samples.add(first)
+	samples.add(second)
+
+	require.Len(t, samples.samples, 1)
+	require.Len(t, samples.samples[0].Ports, 1)
+	port := samples.samples[0].Ports[0]
+	assert.Equal(t, "tcp", port.Protocol)
+	assert.Equal(t, "8080", port.Port)
+	assert.Equal(t, float64(4), port.FlowRate)
+	assert.Equal(t, float64(4), port.Failures)
+}
+
 func TestSummarizePercentiles(t *testing.T) {
 	summary := summarize([]float64{1, 2, 3, 4, 100})
 	assert.Equal(t, float64(3), summary.P50)
 	assert.Equal(t, float64(100), summary.P90)
 	assert.Equal(t, float64(100), summary.P99)
 	assert.Equal(t, float64(22), summary.Average)
+}
+
+func TestSummarizeSamplesWeightsElapsedTime(t *testing.T) {
+	summary := summarizeSamples([]sample{
+		{Covered: 100 * time.Millisecond, FlowRate: 1000},
+		{Covered: time.Second, FlowRate: 100},
+	}, func(sample sample) float64 { return sample.FlowRate })
+	assert.InDelta(t, 181.8, summary.Average, 0.1)
+	assert.Equal(t, float64(100), summary.P50)
+}
+
+func TestHistoryIgnoresSubsecondManualSamples(t *testing.T) {
+	started := time.Now().UTC()
+	var samples history
+	samples.add(dashboardSnapshot(started, started.Add(time.Second), 10, 100, 1))
+	samples.add(dashboardSnapshot(started, started.Add(1500*time.Millisecond), 15, 150, 1))
+	samples.add(dashboardSnapshot(started, started.Add(2*time.Second), 20, 200, 1))
+
+	require.Len(t, samples.samples, 1)
+	assert.Equal(t, float64(10), samples.samples[0].FlowRate)
 }
 
 func TestLatencySeriesCombinesProtocols(t *testing.T) {

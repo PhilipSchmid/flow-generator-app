@@ -8,7 +8,10 @@ import (
 	statusapi "github.com/PhilipSchmid/flow-generator-app/internal/status"
 )
 
-const maxHistorySamples = 15 * 60
+const (
+	maxHistorySamples     = 15*60 + 1
+	minimumSampleInterval = time.Second
+)
 
 type portSample struct {
 	Protocol   string
@@ -23,6 +26,7 @@ type portSample struct {
 
 type sample struct {
 	At          time.Time
+	Covered     time.Duration
 	FlowRate    float64
 	TCPRate     float64
 	UDPRate     float64
@@ -56,11 +60,12 @@ func (h *history) add(snapshot statusapi.Snapshot) {
 	}
 	seconds := snapshot.SampledAt.Sub(h.previous.SampledAt).Seconds()
 	if seconds <= 0 {
-		copy := snapshot
-		h.previous = &copy
 		return
 	}
-	current := sample{At: snapshot.SampledAt, Active: float64(snapshot.Traffic.ActiveTCPConnections)}
+	if snapshot.SampledAt.Sub(h.previous.SampledAt) < minimumSampleInterval {
+		return
+	}
+	current := sample{At: snapshot.SampledAt, Covered: snapshot.SampledAt.Sub(h.previous.SampledAt), Active: float64(snapshot.Traffic.ActiveTCPConnections)}
 	if snapshot.Client != nil && h.previous.Client != nil {
 		current.FlowRate = deltaRate(snapshot.Client.FlowsStarted, h.previous.Client.FlowsStarted, seconds)
 		current.Active = float64(snapshot.Client.FlowsActive)
@@ -110,6 +115,7 @@ func (h *history) window(duration time.Duration) []sample {
 
 func trafficDelta(current, previous statusapi.Snapshot, seconds float64) (tx, rx, tcp, udp float64, ports []portSample) {
 	previousPorts := make(map[string]portTotals, len(previous.Traffic.Ports))
+	portIndexes := make(map[string]int, len(current.Traffic.Ports))
 	for _, port := range previous.Traffic.Ports {
 		previousPorts[port.Protocol+":"+port.Port] = portTotals{
 			requestsReceived: port.RequestsReceived, requestsSent: port.RequestsSent,
@@ -117,10 +123,12 @@ func trafficDelta(current, previous statusapi.Snapshot, seconds float64) (tx, rx
 		}
 	}
 	for _, port := range current.Traffic.Ports {
-		old := previousPorts[port.Protocol+":"+port.Port]
+		key := port.Protocol + ":" + port.Port
+		old := previousPorts[key]
 		requests := deltaRate(max64(port.RequestsReceived, port.RequestsSent), max64(old.requestsReceived, old.requestsSent), seconds)
 		portTX := deltaRate(port.BytesSent, old.bytesSent, seconds)
 		portRX := deltaRate(port.BytesReceived, old.bytesReceived, seconds)
+		portIndexes[key] = len(ports)
 		ports = append(ports, portSample{Protocol: port.Protocol, Port: port.Port, Activity: requests, PacketRate: requests, BytesTX: portTX, BytesRX: portRX})
 		tx += portTX
 		rx += portRX
@@ -136,16 +144,19 @@ func trafficDelta(current, previous statusapi.Snapshot, seconds float64) (tx, rx
 		for _, port := range previous.Client.PortFlows {
 			previousFlows[port.Protocol+":"+stringPort(port.Port)] = port
 		}
-		for i := range ports {
-			for _, flowPort := range current.Client.PortFlows {
-				if ports[i].Protocol == flowPort.Protocol && ports[i].Port == stringPort(flowPort.Port) {
-					old := previousFlows[ports[i].Protocol+":"+ports[i].Port]
-					ports[i].FlowRate = deltaRate(flowPort.Started, old.Started, seconds)
-					ports[i].Activity = ports[i].FlowRate
-					ports[i].Failures = deltaRate(flowPort.Failed, old.Failed, seconds)
-					break
-				}
+		for _, flowPort := range current.Client.PortFlows {
+			port := stringPort(flowPort.Port)
+			key := flowPort.Protocol + ":" + port
+			index, ok := portIndexes[key]
+			if !ok {
+				index = len(ports)
+				portIndexes[key] = index
+				ports = append(ports, portSample{Protocol: flowPort.Protocol, Port: port})
 			}
+			old := previousFlows[key]
+			ports[index].FlowRate = deltaRate(flowPort.Started, old.Started, seconds)
+			ports[index].Activity = ports[index].FlowRate
+			ports[index].Failures = deltaRate(flowPort.Failed, old.Failed, seconds)
 		}
 	}
 	return tx, rx, tcp, udp, ports
@@ -194,6 +205,47 @@ func summarize(values []float64) distribution {
 		P50: percentile(ordered, 0.50), P90: percentile(ordered, 0.90),
 		P95: percentile(ordered, 0.95), P99: percentile(ordered, 0.99),
 		Maximum: ordered[len(ordered)-1],
+	}
+}
+
+type weightedValue struct {
+	value  float64
+	weight float64
+}
+
+func summarizeSamples(samples []sample, pick func(sample) float64) distribution {
+	if len(samples) == 0 {
+		return distribution{}
+	}
+	ordered := make([]weightedValue, len(samples))
+	var weightedSum, totalWeight float64
+	for i, sample := range samples {
+		weight := sample.Covered.Seconds()
+		if weight <= 0 {
+			weight = 1
+		}
+		value := pick(sample)
+		ordered[i] = weightedValue{value: value, weight: weight}
+		weightedSum += value * weight
+		totalWeight += weight
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].value < ordered[j].value })
+	weightedPercentile := func(quantile float64) float64 {
+		target := totalWeight * quantile
+		var cumulative float64
+		for _, item := range ordered {
+			cumulative += item.weight
+			if cumulative >= target {
+				return item.value
+			}
+		}
+		return ordered[len(ordered)-1].value
+	}
+	return distribution{
+		Current: pick(samples[len(samples)-1]), Average: weightedSum / totalWeight,
+		P50: weightedPercentile(0.50), P90: weightedPercentile(0.90),
+		P95: weightedPercentile(0.95), P99: weightedPercentile(0.99),
+		Maximum: ordered[len(ordered)-1].value,
 	}
 }
 
@@ -259,39 +311,70 @@ func histogramPercentile(buckets []uint64, count uint64, quantile float64) time.
 	return statusapi.LatencyBucketUpperBound(len(buckets) - 1)
 }
 
-func values(samples []sample, pick func(sample) float64) []float64 {
-	result := make([]float64, len(samples))
-	for i := range samples {
-		result[i] = pick(samples[i])
+func chartValues(samples []sample, end time.Time, duration time.Duration, pick func(sample) (float64, bool)) []float64 {
+	expected := int(duration / time.Second)
+	if expected <= 0 || len(samples) == 0 {
+		return nil
+	}
+	result := make([]float64, expected)
+	for i := range result {
+		result[i] = math.NaN()
+	}
+	start := end.Add(-time.Duration(expected-1) * time.Second)
+	for _, sample := range samples {
+		value, ok := pick(sample)
+		if !ok {
+			continue
+		}
+		index := int(math.Round(float64(sample.At.Sub(start)) / float64(time.Second)))
+		if index < 0 || index >= expected {
+			continue
+		}
+		result[index] = value
 	}
 	return result
 }
 
-func activityValues(samples []sample, role string) []float64 {
-	if role == "server" {
-		return values(samples, func(sample sample) float64 { return sample.TCPRate + sample.UDPRate })
+func sampleCoverage(samples []sample) time.Duration {
+	var covered time.Duration
+	for _, sample := range samples {
+		if sample.Covered > 0 {
+			covered += sample.Covered
+		} else {
+			covered += time.Second
+		}
 	}
-	return values(samples, func(sample sample) float64 { return sample.FlowRate })
+	return covered
 }
 
 func latencySeries(samples []sample, quantile float64) []float64 {
 	result := make([]float64, len(samples))
 	for i, sample := range samples {
-		var buckets [256]uint64
-		var count uint64
-		for _, latency := range []statusapi.LatencySnapshot{sample.TCPLatency, sample.UDPLatency} {
-			count += latency.Count
-			for bucket, value := range latency.Buckets {
-				if bucket < len(buckets) {
-					buckets[bucket] += value
-				}
-			}
-		}
-		if count > 0 {
-			result[i] = float64(histogramPercentile(buckets[:], count, quantile))
+		value, ok := latencyValue(sample, quantile)
+		if !ok {
+			result[i] = math.NaN()
+		} else {
+			result[i] = value
 		}
 	}
 	return result
+}
+
+func latencyValue(sample sample, quantile float64) (float64, bool) {
+	var buckets [256]uint64
+	var count uint64
+	for _, latency := range []statusapi.LatencySnapshot{sample.TCPLatency, sample.UDPLatency} {
+		count += latency.Count
+		for bucket, value := range latency.Buckets {
+			if bucket < len(buckets) {
+				buckets[bucket] += value
+			}
+		}
+	}
+	if count == 0 {
+		return 0, false
+	}
+	return float64(histogramPercentile(buckets[:], count, quantile)), true
 }
 
 func max64(a, b uint64) uint64 {
