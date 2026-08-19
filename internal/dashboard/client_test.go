@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/PhilipSchmid/flow-generator-app/internal/config"
+	"github.com/PhilipSchmid/flow-generator-app/internal/metrics"
 	statusapi "github.com/PhilipSchmid/flow-generator-app/internal/status"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -104,4 +106,80 @@ func TestClientRejectsOversizedResponse(t *testing.T) {
 	require.NoError(t, err)
 	_, err = client.Fetch()
 	require.ErrorContains(t, err, "exceeds 1 MiB")
+}
+
+func TestClientStripsTerminalControlsFromStatusText(t *testing.T) {
+	now := time.Now().UTC()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(statusapi.Snapshot{
+			SchemaVersion: statusapi.SchemaVersion,
+			Role:          "client",
+			Version:       "v1\x1b]8;;https://example.invalid\a",
+			State:         "run\nning",
+			SampledAt:     now,
+			StartedAt:     now,
+			Configuration: statusapi.Configuration{Target: "echo\x1b[31m.invalid"},
+			Client:        &statusapi.ClientSnapshot{},
+		})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL)
+	require.NoError(t, err)
+	snapshot, err := client.Fetch()
+	require.NoError(t, err)
+	assert.NotContains(t, snapshot.Version, "\x1b")
+	assert.NotContains(t, snapshot.Version, "\a")
+	assert.Equal(t, "running", snapshot.State)
+	assert.Equal(t, "echo[31m.invalid", snapshot.Configuration.Target)
+}
+
+func TestClientRejectsUnboundedStatusCollections(t *testing.T) {
+	now := time.Now().UTC()
+	tests := []struct {
+		name    string
+		mutate  func(*statusapi.Snapshot)
+		wantErr string
+	}{
+		{
+			name: "latency buckets",
+			mutate: func(snapshot *statusapi.Snapshot) {
+				snapshot.Client.TCPLatency.Buckets = make([]uint64, statusapi.LatencyBucketCount+1)
+			},
+			wantErr: "latency buckets",
+		},
+		{
+			name: "traffic ports",
+			mutate: func(snapshot *statusapi.Snapshot) {
+				snapshot.Traffic.Ports = make([]metrics.PortSnapshot, config.MaxPorts+1)
+			},
+			wantErr: "port limit",
+		},
+		{
+			name: "latency counters",
+			mutate: func(snapshot *statusapi.Snapshot) {
+				snapshot.Client.TCPLatency = statusapi.LatencySnapshot{Count: 1, SumNanos: 1, Buckets: make([]uint64, statusapi.LatencyBucketCount)}
+			},
+			wantErr: "inconsistent latency counters",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := statusapi.Snapshot{
+				SchemaVersion: statusapi.SchemaVersion, Role: "client",
+				SampledAt: now, StartedAt: now, Client: &statusapi.ClientSnapshot{},
+			}
+			test.mutate(&snapshot)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(snapshot)
+			}))
+			defer server.Close()
+			client, err := NewClient(server.URL)
+			require.NoError(t, err)
+			_, err = client.Fetch()
+			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
 }

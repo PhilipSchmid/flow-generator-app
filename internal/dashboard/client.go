@@ -10,12 +10,18 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/PhilipSchmid/flow-generator-app/internal/config"
 	statusapi "github.com/PhilipSchmid/flow-generator-app/internal/status"
 )
 
 const maxStatusResponseBytes = 1 << 20
+
+const (
+	maxStatusTextLength = 4096
+)
 
 var defaultEndpoints = []string{
 	"http://127.0.0.1:9190" + statusapi.Path,
@@ -27,6 +33,7 @@ type Client struct {
 	httpClient *http.Client
 	endpoints  []string
 	selected   string
+	fetchMu    sync.Mutex
 }
 
 // NewClient validates an optional loopback endpoint. An empty endpoint enables
@@ -62,6 +69,8 @@ func NewClient(endpoint string) (*Client, error) {
 
 // Fetch returns the first valid local snapshot and sticks to that endpoint.
 func (c *Client) Fetch() (statusapi.Snapshot, error) {
+	c.fetchMu.Lock()
+	defer c.fetchMu.Unlock()
 	endpoints := c.endpoints
 	if c.selected != "" {
 		endpoints = []string{c.selected}
@@ -130,7 +139,92 @@ func (c *Client) fetch(endpoint string) (statusapi.Snapshot, error) {
 	if snapshot.SampledAt.IsZero() || snapshot.StartedAt.IsZero() {
 		return statusapi.Snapshot{}, errors.New("status response is missing timestamps")
 	}
+	if err := validateSnapshot(snapshot); err != nil {
+		return statusapi.Snapshot{}, err
+	}
+	sanitizeSnapshotStrings(&snapshot)
 	return snapshot, nil
+}
+
+func validateSnapshot(snapshot statusapi.Snapshot) error {
+	if snapshot.StartedAt.After(snapshot.SampledAt) {
+		return errors.New("status response starts after its sample time")
+	}
+	if len(snapshot.Configuration.TCPPorts)+len(snapshot.Configuration.UDPPorts) > config.MaxPorts ||
+		len(snapshot.Traffic.Ports) > config.MaxPorts {
+		return fmt.Errorf("status response exceeds the %d-port limit", config.MaxPorts)
+	}
+	for _, value := range []string{
+		snapshot.Version, snapshot.State, snapshot.Configuration.Target,
+		snapshot.Configuration.Protocol, snapshot.Configuration.HealthPort,
+		snapshot.Configuration.MetricsPort,
+	} {
+		if len(value) > maxStatusTextLength {
+			return errors.New("status response contains oversized text")
+		}
+	}
+	for _, port := range snapshot.Traffic.Ports {
+		if len(port.Protocol) > 16 || len(port.Port) > 16 {
+			return errors.New("status response contains an invalid traffic port")
+		}
+	}
+	if snapshot.Client == nil {
+		return nil
+	}
+	if len(snapshot.Client.PortFlows) > config.MaxPorts {
+		return fmt.Errorf("status response exceeds the %d-port limit", config.MaxPorts)
+	}
+	for _, port := range snapshot.Client.PortFlows {
+		if len(port.Protocol) > 16 {
+			return errors.New("status response contains an invalid flow port")
+		}
+	}
+	for _, latency := range []statusapi.LatencySnapshot{snapshot.Client.TCPLatency, snapshot.Client.UDPLatency} {
+		if len(latency.Buckets) != 0 && len(latency.Buckets) != statusapi.LatencyBucketCount {
+			return fmt.Errorf("status response contains %d latency buckets; expected %d", len(latency.Buckets), statusapi.LatencyBucketCount)
+		}
+		var count uint64
+		for _, bucket := range latency.Buckets {
+			if ^uint64(0)-count < bucket {
+				return errors.New("status response latency bucket count overflows")
+			}
+			count += bucket
+		}
+		if count != latency.Count || (latency.Count > 0 && latency.SumNanos == 0) {
+			return errors.New("status response contains inconsistent latency counters")
+		}
+	}
+	return nil
+}
+
+func sanitizeSnapshotStrings(snapshot *statusapi.Snapshot) {
+	if snapshot == nil {
+		return
+	}
+	snapshot.Version = terminalSafe(snapshot.Version)
+	snapshot.State = terminalSafe(snapshot.State)
+	snapshot.Configuration.Target = terminalSafe(snapshot.Configuration.Target)
+	snapshot.Configuration.Protocol = terminalSafe(snapshot.Configuration.Protocol)
+	snapshot.Configuration.HealthPort = terminalSafe(snapshot.Configuration.HealthPort)
+	snapshot.Configuration.MetricsPort = terminalSafe(snapshot.Configuration.MetricsPort)
+	for i := range snapshot.Traffic.Ports {
+		snapshot.Traffic.Ports[i].Protocol = terminalSafe(snapshot.Traffic.Ports[i].Protocol)
+		snapshot.Traffic.Ports[i].Port = terminalSafe(snapshot.Traffic.Ports[i].Port)
+	}
+	if snapshot.Client != nil {
+		for i := range snapshot.Client.PortFlows {
+			snapshot.Client.PortFlows[i].Protocol = terminalSafe(snapshot.Client.PortFlows[i].Protocol)
+		}
+	}
+}
+
+func terminalSafe(value string) string {
+	return strings.Map(func(char rune) rune {
+		if char < 0x20 || char == 0x7f || (char >= 0x80 && char <= 0x9f) {
+			return -1
+		}
+		return char
+	}, value)
 }
 
 func normalizeEndpoint(raw string) (string, error) {
