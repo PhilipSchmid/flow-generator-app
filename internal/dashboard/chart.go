@@ -7,12 +7,29 @@ import (
 
 const sparkBlocks = "▁▂▃▄▅▆▇█"
 
-func sparkline(values []float64, width int, reference float64) string {
+type traceSample struct {
+	x     int
+	value float64
+}
+
+type brailleCanvas struct {
+	width  int
+	height int
+	dots   []uint8
+}
+
+var brailleBits = [2][4]uint8{
+	{0, 1, 2, 6},
+	{3, 4, 5, 7},
+}
+
+func sparkline(values []float64, width int, reference float64, expectedSamples int) string {
 	if width <= 0 {
 		return ""
 	}
-	values = fitSamples(values, width)
-	if len(values) == 0 {
+	values = latestSamples(values, expectedSamples)
+	points := timelineSamples(values, width, expectedSamples)
+	if len(points) == 0 {
 		return strings.Repeat("·", width)
 	}
 	maximum := reference
@@ -22,78 +39,169 @@ func sparkline(values []float64, width int, reference float64) string {
 		}
 	}
 	if maximum <= 0 {
-		return strings.Repeat("▁", len(values))
+		maximum = 1
 	}
 	blocks := []rune(sparkBlocks)
-	var result strings.Builder
-	result.Grow(len(values) * 3)
-	for _, value := range values {
-		index := int(math.Round(value / maximum * float64(len(blocks)-1)))
+	result := []rune(strings.Repeat(" ", width))
+	for _, point := range points {
+		index := int(math.Round(point.value / maximum * float64(len(blocks)-1)))
 		if index < 0 {
 			index = 0
 		}
 		if index >= len(blocks) {
 			index = len(blocks) - 1
 		}
-		result.WriteRune(blocks[index])
+		result[point.x] = blocks[index]
 	}
-	return result.String()
+	return string(result)
 }
 
-func lineChart(values []float64, width, height int, reference float64) string {
+func lineChart(values []float64, width, height int, reference float64, expectedSamples int) string {
 	if width <= 0 || height <= 0 {
 		return ""
 	}
-	values = fitSamples(values, width)
-	if len(values) == 0 {
+	values = latestSamples(values, expectedSamples)
+	canvas := newBrailleCanvas(width, height)
+	points := timelineSamples(values, width*2, expectedSamples)
+	if len(points) == 0 {
 		return strings.Join(emptyChart(width, height), "\n")
 	}
 	minimum, maximum := chartBounds(values, reference)
-	grid := make([][]rune, height)
-	for row := range grid {
-		grid[row] = []rune(strings.Repeat(" ", width))
-	}
-	scaleRow := func(value float64) int {
+	scaleY := func(value float64) int {
 		ratio := (value - minimum) / (maximum - minimum)
-		row := height - 1 - int(math.Round(ratio*float64(height-1)))
-		if row < 0 {
+		y := height*4 - 1 - int(math.Round(ratio*float64(height*4-1)))
+		if y < 0 {
 			return 0
 		}
-		if row >= height {
-			return height - 1
+		if y >= height*4 {
+			return height*4 - 1
 		}
-		return row
+		return y
 	}
 	if reference > 0 && reference >= minimum && reference <= maximum {
-		row := scaleRow(reference)
-		for column := range width {
-			grid[row][column] = '┄'
+		y := scaleY(reference)
+		for x := 0; x < width*2; x += 4 {
+			canvas.set(x, y)
+			canvas.set(x+1, y)
 		}
 	}
-	previousRow := -1
-	for column, value := range values {
-		row := scaleRow(value)
-		if previousRow == row {
-			grid[row][column] = '─'
-		} else {
-			grid[row][column] = '●'
-			if previousRow >= 0 {
-				top, bottom := row, previousRow
-				if top > bottom {
-					top, bottom = bottom, top
-				}
-				for bridge := top + 1; bridge < bottom; bridge++ {
-					grid[bridge][column] = '│'
-				}
+	previousX, previousY := points[0].x, scaleY(points[0].value)
+	canvas.set(previousX, previousY)
+	for _, point := range points[1:] {
+		y := scaleY(point.value)
+		canvas.line(previousX, previousY, point.x, y)
+		previousX, previousY = point.x, y
+	}
+	return canvas.render()
+}
+
+func timelineSamples(values []float64, width, expectedSamples int) []traceSample {
+	if len(values) == 0 || width <= 0 {
+		return nil
+	}
+	if expectedSamples <= 0 {
+		expectedSamples = len(values)
+	}
+	if len(values) > expectedSamples {
+		values = values[len(values)-expectedSamples:]
+	}
+	if expectedSamples == 1 || width == 1 {
+		return []traceSample{{x: width - 1, value: values[len(values)-1]}}
+	}
+
+	points := make([]traceSample, 0, minInt(len(values), width))
+	start := expectedSamples - len(values)
+	currentX := -1
+	var sum float64
+	count := 0
+	for i, value := range values {
+		x := int(math.Round(float64(start+i) * float64(width-1) / float64(expectedSamples-1)))
+		if x < 0 {
+			x = 0
+		}
+		if x >= width {
+			x = width - 1
+		}
+		if currentX >= 0 && x != currentX {
+			points = append(points, traceSample{x: currentX, value: sum / float64(count)})
+			sum = 0
+			count = 0
+		}
+		currentX = x
+		sum += value
+		count++
+	}
+	if count > 0 {
+		points = append(points, traceSample{x: currentX, value: sum / float64(count)})
+	}
+	return points
+}
+
+func latestSamples(values []float64, expectedSamples int) []float64 {
+	if expectedSamples > 0 && len(values) > expectedSamples {
+		return values[len(values)-expectedSamples:]
+	}
+	return values
+}
+
+func newBrailleCanvas(width, height int) brailleCanvas {
+	return brailleCanvas{width: width, height: height, dots: make([]uint8, width*height)}
+}
+
+func (c brailleCanvas) set(x, y int) {
+	if x < 0 || x >= c.width*2 || y < 0 || y >= c.height*4 {
+		return
+	}
+	cell := (y/4)*c.width + x/2
+	c.dots[cell] |= 1 << brailleBits[x%2][y%4]
+}
+
+func (c brailleCanvas) line(x0, y0, x1, y1 int) {
+	dx := absInt(x1 - x0)
+	sx := -1
+	if x0 < x1 {
+		sx = 1
+	}
+	dy := -absInt(y1 - y0)
+	sy := -1
+	if y0 < y1 {
+		sy = 1
+	}
+	err := dx + dy
+	for {
+		c.set(x0, y0)
+		if x0 == x1 && y0 == y1 {
+			return
+		}
+		twiceError := 2 * err
+		if twiceError >= dy {
+			err += dy
+			x0 += sx
+		}
+		if twiceError <= dx {
+			err += dx
+			y0 += sy
+		}
+	}
+}
+
+func (c brailleCanvas) render() string {
+	var result strings.Builder
+	result.Grow(c.height * (c.width*3 + 1))
+	for row := 0; row < c.height; row++ {
+		if row > 0 {
+			result.WriteByte('\n')
+		}
+		for column := 0; column < c.width; column++ {
+			mask := c.dots[row*c.width+column]
+			if mask == 0 {
+				result.WriteByte(' ')
+				continue
 			}
+			result.WriteRune(rune(0x2800) + rune(mask))
 		}
-		previousRow = row
 	}
-	lines := make([]string, height)
-	for row := range grid {
-		lines[row] = string(grid[row])
-	}
-	return strings.Join(lines, "\n")
+	return result.String()
 }
 
 func chartBounds(values []float64, reference float64) (float64, float64) {
@@ -145,36 +253,16 @@ func emptyChart(width, height int) []string {
 	return lines
 }
 
-func fitSamples(values []float64, width int) []float64 {
-	if len(values) == 0 || width <= 0 {
-		return nil
+func minInt(a, b int) int {
+	if a < b {
+		return a
 	}
-	if len(values) < width {
-		result := make([]float64, width)
-		for i := range result {
-			result[i] = values[i*len(values)/width]
-		}
-		return result
-	}
-	return downsample(values, width)
+	return b
 }
 
-func downsample(values []float64, width int) []float64 {
-	if len(values) <= width {
-		return values
+func absInt(value int) int {
+	if value < 0 {
+		return -value
 	}
-	result := make([]float64, width)
-	for i := range result {
-		start := i * len(values) / width
-		end := (i + 1) * len(values) / width
-		if end <= start {
-			end = start + 1
-		}
-		var sum float64
-		for _, value := range values[start:end] {
-			sum += value
-		}
-		result[i] = sum / float64(end-start)
-	}
-	return result
+	return value
 }

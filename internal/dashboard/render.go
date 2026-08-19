@@ -60,6 +60,7 @@ func (m Model) render() string {
 	}
 
 	if width >= 90 && m.height >= 24 {
+		expectedSamples := int(m.selectedWindow() / time.Second)
 		chartWidth := width - 4
 		if width >= 120 {
 			chartWidth = (width - 1) / 2
@@ -83,14 +84,14 @@ func (m Model) render() string {
 			rateTitle = "Flow starts/s"
 			reference = snapshot.Configuration.Rate
 		}
-		flowChart := chartPanel(rateTitle, rateValues, chartWidth, chartHeight, reference, formatRate(flow.Current), colors.primary, colors)
-		payloadChart := chartPanel("Payload throughput", values(window, func(s sample) float64 { return (s.BytesTX + s.BytesRX) * 8 }), chartWidth, chartHeight, 0, "TX "+formatBits(tx.Current)+" · RX "+formatBits(rx.Current), colors.tx, colors)
+		flowChart := chartPanel(rateTitle, rateValues, chartWidth, chartHeight, reference, expectedSamples, formatRate(flow.Current), colors.primary, colors)
+		payloadChart := chartPanel("Payload throughput", values(window, func(s sample) float64 { return (s.BytesTX + s.BytesRX) * 8 }), chartWidth, chartHeight, 0, expectedSamples, "TX "+formatBits(tx.Current)+" · RX "+formatBits(rx.Current), colors.tx, colors)
 		if width >= 120 {
 			activeTitle := "Active TCP"
 			if snapshot.Role == "client" {
 				activeTitle = "Active flows"
 			}
-			activeChart := chartPanel(activeTitle, values(window, func(s sample) float64 { return s.Active }), chartWidth, chartHeight, 0, formatFloatCount(active.Current), colors.tcp, colors)
+			activeChart := chartPanel(activeTitle, values(window, func(s sample) float64 { return s.Active }), chartWidth, chartHeight, 0, expectedSamples, formatFloatCount(active.Current), colors.tcp, colors)
 			body = append(body, lipgloss.JoinHorizontal(lipgloss.Top, flowChart, " ", activeChart))
 			if snapshot.Role == "client" {
 				rttValues := latencySeries(window, 0.95)
@@ -98,10 +99,10 @@ func (m Model) render() string {
 				if latencyCount > 0 {
 					rttCurrent = formatLatency(latency.P95)
 				}
-				rttChart := chartPanel("Echo RTT p95", rttValues, chartWidth, chartHeight, 0, rttCurrent, colors.udp, colors)
+				rttChart := chartPanel("Echo RTT p95", rttValues, chartWidth, chartHeight, 0, expectedSamples, rttCurrent, colors.udp, colors)
 				body = append(body, lipgloss.JoinHorizontal(lipgloss.Top, payloadChart, " ", rttChart))
 			} else {
-				body = append(body, chartPanel("Payload throughput", values(window, func(s sample) float64 { return (s.BytesTX + s.BytesRX) * 8 }), width, chartHeight, 0, "TX "+formatBits(tx.Current)+" · RX "+formatBits(rx.Current), colors.tx, colors))
+				body = append(body, chartPanel("Payload throughput", values(window, func(s sample) float64 { return (s.BytesTX + s.BytesRX) * 8 }), width, chartHeight, 0, expectedSamples, "TX "+formatBits(tx.Current)+" · RX "+formatBits(rx.Current), colors.tx, colors))
 			}
 		} else {
 			body = append(body, flowChart, payloadChart)
@@ -111,8 +112,15 @@ func (m Model) render() string {
 	if errors := m.errorLine(snapshot, colors); errors != "" {
 		body = append(body, errors)
 	}
-	distribution := m.distributionTable(snapshot, flow, tx, rx, active, latency, latencyCount, colors, width)
-	ports := m.portTable(snapshot, colors, width)
+	detailWidth := width
+	if width >= 90 {
+		detailWidth = maxInt(width-4, 10)
+	}
+	if width >= 160 {
+		detailWidth = maxInt((width-1)/2-4, 10)
+	}
+	distribution := m.distributionTable(snapshot, flow, tx, rx, active, latency, latencyCount, colors, detailWidth)
+	ports := m.portTable(snapshot, colors, detailWidth)
 	if m.height >= 28 || width < 90 {
 		switch {
 		case width >= 160:
@@ -335,32 +343,42 @@ func (m Model) windowSelector(colors palette) string {
 	return strings.Join(parts, " ")
 }
 
-func chartPanel(title string, values []float64, width, height int, reference float64, current string, accent interface {
+func chartPanel(title string, values []float64, width, height int, reference float64, expectedSamples int, current string, accent interface {
 	RGBA() (uint32, uint32, uint32, uint32)
 }, colors palette) string {
 	inner := maxInt(width-4, 10)
 	heading := joinSides(styled(colors.muted).Bold(true).Render(strings.ToUpper(title)), styled(accent).Bold(true).Render(current), inner)
-	chart := sparkline(values, inner, reference)
+	chart := sparkline(values, inner, reference, expectedSamples)
 	if height > 1 {
 		label := strings.ToUpper(title) + "  ·  AUTO RANGE"
 		if reference > 0 {
 			label += "  ·  ┄ TARGET"
 		}
 		heading = joinSides(styled(colors.muted).Bold(true).Render(label), styled(accent).Bold(true).Render(current), inner)
-		chart = lineChart(values, inner, height, reference)
+		chart = lineChart(values, inner, height, reference, expectedSamples)
 	}
 	content := heading + "\n" + styled(accent).Render(chart)
 	return lipgloss.NewStyle().Width(maxInt(width, 14)).Padding(0, 1).Border(lipgloss.RoundedBorder()).BorderForeground(colors.border).Render(content)
 }
 
 func (m Model) distributionTable(snapshot statusapi.Snapshot, flow, tx, rx, active, latency distribution, latencyCount uint64, colors palette, width int) string {
+	labelWidth, valueWidth := distributionColumnWidths(width)
+	formatRow := func(label string, cells ...string) string {
+		var row strings.Builder
+		_, _ = fmt.Fprintf(&row, "%-*s", labelWidth, label)
+		for _, cell := range cells {
+			_, _ = fmt.Fprintf(&row, " %*s", valueWidth, cell)
+		}
+		return row.String()
+	}
 	var builder strings.Builder
 	builder.WriteString(styled(colors.muted).Bold(true).Render("WINDOW STATISTICS  ·  " + strings.ToUpper(windowLabel(m.selectedWindow()))))
 	builder.WriteString("\n")
-	builder.WriteString(styled(colors.muted).Render(fmt.Sprintf("%-10s %8s %8s %8s %8s %8s %8s", "METRIC", "AVG", "P50", "P90", "P95", "P99", "MAX")))
+	builder.WriteString(styled(colors.muted).Render(formatRow("METRIC", "AVG", "P50", "P90", "P95", "P99", "MAX")))
 	builder.WriteString("\n")
 	row := func(label string, value distribution, format func(float64) string) {
-		_, _ = fmt.Fprintf(&builder, "%-10s %8s %8s %8s %8s %8s %8s\n", label, format(value.Average), format(value.P50), format(value.P90), format(value.P95), format(value.P99), format(value.Maximum))
+		builder.WriteString(formatRow(label, format(value.Average), format(value.P50), format(value.P90), format(value.P95), format(value.P99), format(value.Maximum)))
+		builder.WriteByte('\n')
 	}
 	if snapshot.Role == "client" {
 		row("Flow/s", flow, formatFloatRate)
@@ -376,6 +394,19 @@ func (m Model) distributionTable(snapshot statusapi.Snapshot, flow, tx, rx, acti
 		builder.WriteString(styled(colors.muted).Render(fmt.Sprintf("RTT samples: %s", formatCount(latencyCount))))
 	}
 	return lipgloss.NewStyle().MaxWidth(width).Render(strings.TrimRight(builder.String(), "\n"))
+}
+
+func distributionColumnWidths(width int) (int, int) {
+	const valueColumns = 6
+	labelWidth := 12
+	valueWidth := (width - labelWidth - valueColumns) / valueColumns
+	if valueWidth < 8 {
+		valueWidth = 8
+	}
+	if valueWidth > 13 {
+		valueWidth = 13
+	}
+	return labelWidth, valueWidth
 }
 
 func (m Model) portTable(snapshot statusapi.Snapshot, colors palette, width int) string {
@@ -453,7 +484,7 @@ func (m Model) helpPanel(colors palette, width int) string {
 		styled(colors.text).Bold(true).Render("SHORTCUTS") + styled(colors.muted).Render("  ·  keyboard-first; the monitored process keeps running when the dashboard exits"),
 		styled(colors.primary).Render("← / h") + styled(colors.muted).Render(" previous window  ·  ") + styled(colors.primary).Render("→ / l / Tab") + styled(colors.muted).Render(" next  ·  ") + styled(colors.primary).Render("1 / 5 / 0") + styled(colors.muted).Render(" select 1m / 5m / 15m"),
 		styled(colors.primary).Render("Space") + styled(colors.muted).Render(" pause or resume  ·  ") + styled(colors.primary).Render("r") + styled(colors.muted).Render(" refresh now  ·  ") + styled(colors.primary).Render("? / F1") + styled(colors.muted).Render(" toggle help  ·  ") + styled(colors.primary).Render("q / F10") + styled(colors.muted).Render(" quit"),
-		styled(colors.muted).Render("Charts auto-scale to expose variation; the dashed rate line marks target. p50 is the median; RTT uses sampled echoes."),
+		styled(colors.muted).Render("Charts keep a fixed time axis and auto-scale vertically; the dashed rate line marks target. p50 is the median; RTT uses sampled echoes."),
 	}, "\n")
 	return sectionPanel(content, width, lineCount(content), colors)
 }
