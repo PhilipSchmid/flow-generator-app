@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"strconv"
 	"testing"
 	"time"
 
@@ -33,6 +34,7 @@ func TestStatusServerIsLoopbackAndGetOnly(t *testing.T) {
 	defer func() { _ = response.Body.Close() }()
 	assert.Equal(t, http.StatusOK, response.StatusCode)
 	assert.Equal(t, "no-store", response.Header.Get("Cache-Control"))
+	assert.Equal(t, "same-origin", response.Header.Get("Cross-Origin-Resource-Policy"))
 	var snapshot Snapshot
 	require.NoError(t, json.NewDecoder(response.Body).Decode(&snapshot))
 	assert.Equal(t, "client", snapshot.Role)
@@ -44,6 +46,38 @@ func TestStatusServerIsLoopbackAndGetOnly(t *testing.T) {
 	defer func() { _ = postResponse.Body.Close() }()
 	assert.Equal(t, http.StatusMethodNotAllowed, postResponse.StatusCode)
 	assert.Equal(t, http.MethodGet, postResponse.Header.Get("Allow"))
+}
+
+func TestStatusServerRejectsUntrustedHostAndOrigin(t *testing.T) {
+	server, err := startAt("127.0.0.1:0", func() Snapshot { return Snapshot{SchemaVersion: SchemaVersion} })
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		require.NoError(t, server.Stop(ctx))
+	})
+	endpoint := "http://" + server.Addr().String() + Path
+
+	for name, testCase := range map[string]struct {
+		host   string
+		origin string
+	}{
+		"rebinding host": {host: "attacker.example:" + strconv.Itoa(server.Addr().(*net.TCPAddr).Port)},
+		"cross origin":   {host: server.Addr().String(), origin: "https://attacker.example"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			request, requestErr := http.NewRequest(http.MethodGet, endpoint, nil)
+			require.NoError(t, requestErr)
+			request.Host = testCase.host
+			if testCase.origin != "" {
+				request.Header.Set("Origin", testCase.origin)
+			}
+			response, requestErr := http.DefaultClient.Do(request)
+			require.NoError(t, requestErr)
+			defer func() { _ = response.Body.Close() }()
+			assert.Equal(t, http.StatusForbidden, response.StatusCode)
+		})
+	}
 }
 
 func TestStatusServerCanBeDisabled(t *testing.T) {
