@@ -21,8 +21,6 @@ func TestMonitorShortcuts(t *testing.T) {
 	model = updateWithKey(t, model, tea.Key{Code: tea.KeyTab, Mod: tea.ModShift})
 	assert.Equal(t, len(windows)-1, model.windowIndex)
 
-	model = updateWithKey(t, model, tea.Key{Code: tea.KeySpace})
-	assert.True(t, model.paused)
 	model = updateWithKey(t, model, tea.Key{Code: tea.KeyF1})
 	assert.True(t, model.showHelp)
 	model = updateWithKey(t, model, tea.Key{Code: tea.KeyRight})

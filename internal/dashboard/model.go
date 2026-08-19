@@ -30,7 +30,6 @@ type Model struct {
 	dark        bool
 	color       bool
 	showHelp    bool
-	paused      bool
 }
 
 func NewModel(client *Client, color bool) Model {
@@ -81,11 +80,6 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.windowIndex = 2
 		case "?", "f1":
 			m.showHelp = !m.showHelp
-		case "space":
-			m.paused = !m.paused
-			if !m.paused {
-				return m, m.fetch(false)
-			}
 		case "r":
 			return m, m.fetch(false)
 		}
@@ -105,9 +99,6 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case refreshMsg:
-		if m.paused {
-			return m, tea.Tick(time.Second, func(now time.Time) tea.Msg { return refreshMsg(now) })
-		}
 		return m, m.fetch(true)
 	}
 	return m, nil

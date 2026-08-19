@@ -187,9 +187,6 @@ func (m Model) heading(snapshot statusapi.Snapshot, title, state string, stateCo
 	identity := styled(colors.primary).Bold(true).Render(strings.ToUpper(title)) +
 		styled(colors.muted).Render("  /  ") + styled(colors.text).Bold(true).Render(role)
 	status := styled(stateColor).Bold(true).Render("● " + state)
-	if m.paused {
-		status = styled(colors.warning).Bold(true).Render("Ⅱ PAUSED") + styled(colors.muted).Render("  ·  ") + status
-	}
 	if !m.connected {
 		status += styled(colors.danger).Bold(true).Render("  LAST SAMPLE")
 	}
@@ -582,7 +579,6 @@ func (m Model) helpModal(colors palette, width int) string {
 		row("← / h", "Previous time range"),
 		row("→ / l / Tab", "Next time range"),
 		row("1 / 5 / 0", "Select 1m / 5m / 15m"),
-		row("Space", "Freeze or resume dashboard samples"),
 		row("r", "Refresh the status sample now"),
 		row("q / F10", "Quit; traffic keeps running"),
 		styled(colors.muted).Render("Y ranges auto-scale. The dashed flow line is the configured target."),
@@ -606,20 +602,16 @@ func overlayModal(background, modal string, width, height int) string {
 
 func (m Model) footer(colors palette, width int) string {
 	left := keycap("←→ / Tab", colors) + styled(colors.muted).Render(" window  ") +
-		keycap("Space", colors) + styled(colors.muted).Render(" pause  ") +
 		keycap("r", colors) + styled(colors.muted).Render(" refresh  ") +
 		keycap("? / F1", colors) + styled(colors.muted).Render(" help  ") +
 		keycap("q / F10", colors) + styled(colors.muted).Render(" quit")
 	if width < 100 {
 		left = keycap("←→", colors) + styled(colors.muted).Render(" window  ") +
-			keycap("Space", colors) + styled(colors.muted).Render(" pause  ") +
+			keycap("r", colors) + styled(colors.muted).Render(" refresh  ") +
 			keycap("?", colors) + styled(colors.muted).Render(" help  ") +
 			keycap("q", colors) + styled(colors.muted).Render(" quit")
 	}
 	mode := styled(colors.healthy).Bold(true).Render("● LIVE")
-	if m.paused {
-		mode = styled(colors.warning).Bold(true).Render("Ⅱ PAUSED")
-	}
 	right := mode + styled(colors.muted).Render("  ·  "+windowLabel(m.selectedWindow()))
 	return lipgloss.NewStyle().MaxWidth(width).Render(joinSides(left, right, width))
 }

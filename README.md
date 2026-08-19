@@ -189,7 +189,6 @@ The dashboard keeps 1-, 5-, and 15-minute averages visible. Charts label the sel
 |-----|--------|
 | `←` / `→`, `h` / `l`, `Tab` / `Shift+Tab` | Change the chart and percentile window |
 | `1`, `5`, `0` | Select the 1-, 5-, or 15-minute window |
-| `Space` | Pause or resume dashboard sampling; traffic continues |
 | `r` | Refresh now |
 | `?`, `F1` | Toggle dashboard help |
 | `q`, `F10` | Leave the dashboard; the monitored process keeps running |
