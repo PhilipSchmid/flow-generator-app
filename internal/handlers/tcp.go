@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"strconv"
@@ -85,12 +86,12 @@ func (h *TCPHandler) Handle(conn net.Conn) {
 	for {
 		n, err := conn.Read(buf)
 		if err != nil {
-			if err != io.EOF {
+			if err != io.EOF && !errors.Is(err, net.ErrClosed) {
 				if h.statusTracker != nil {
 					h.statusTracker.RecordReadError()
 				}
 				if logging.DebugEnabled() {
-					tcpFailureLogs.read.Debugw("TCP connection read failed", "remote", conn.RemoteAddr(), "error", err)
+					tcpFailureLogs.read.Debugw("TCP connection read failed", "scope", "all TCP clients", "latest_error", err)
 				}
 			}
 			return
@@ -102,11 +103,13 @@ func (h *TCPHandler) Handle(conn net.Conn) {
 			count, writeErr := conn.Write(buf[written:n])
 			written += count
 			if writeErr != nil {
-				if h.statusTracker != nil {
-					h.statusTracker.RecordWriteError()
-				}
-				if logging.DebugEnabled() {
-					tcpFailureLogs.write.Debugw("TCP connection write failed", "remote", conn.RemoteAddr(), "error", writeErr)
+				if !errors.Is(writeErr, net.ErrClosed) {
+					if h.statusTracker != nil {
+						h.statusTracker.RecordWriteError()
+					}
+					if logging.DebugEnabled() {
+						tcpFailureLogs.write.Debugw("TCP connection write failed", "scope", "all TCP clients", "latest_error", writeErr)
+					}
 				}
 				return
 			}

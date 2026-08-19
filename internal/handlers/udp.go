@@ -53,7 +53,7 @@ func (h *UDPHandler) Handle(conn *net.UDPConn) {
 				if h.statusTracker != nil {
 					h.statusTracker.RecordReadError()
 				}
-				udpFailureLogs.read.Warnw("UDP listener read failed", "port", portStr, "error", err)
+				udpFailureLogs.read.Warnw("UDP listener read failed", "scope", "all UDP listeners", "latest_error", err)
 			}
 			return
 		}
@@ -77,15 +77,17 @@ func (h *UDPHandler) Handle(conn *net.UDPConn) {
 
 		n, err = conn.WriteToUDPAddrPort(buf[:n], addr)
 		if err != nil {
-			if h.statusTracker != nil {
-				h.statusTracker.RecordWriteError()
-			}
 			if packetSpan != nil {
 				packetSpan.RecordError(err)
 				packetSpan.End()
 			}
-			if logging.DebugEnabled() {
-				udpFailureLogs.write.Debugw("UDP response write failed", "remote", addr, "error", err)
+			if !errors.Is(err, net.ErrClosed) {
+				if h.statusTracker != nil {
+					h.statusTracker.RecordWriteError()
+				}
+				if logging.DebugEnabled() {
+					udpFailureLogs.write.Debugw("UDP response write failed", "scope", "all UDP clients", "latest_error", err)
+				}
 			}
 			continue
 		}
