@@ -3,7 +3,7 @@ module github.com/PhilipSchmid/flow-generator-app
 go 1.25.0
 
 require (
-	charm.land/bubbletea/v2 v2.0.8
+	charm.land/bubbletea/v2 v2.0.9
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/charmbracelet/colorprofile v0.4.3
 	github.com/charmbracelet/x/term v0.2.2
