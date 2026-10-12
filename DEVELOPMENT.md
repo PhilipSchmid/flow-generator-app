@@ -49,7 +49,7 @@ flow-generator-app/
 
 Requirements:
 
-- Go 1.25 or newer
+- Go 1.26 or newer
 - Make
 - Docker for container targets
 - `curl` if `make install-tools` needs to install golangci-lint
